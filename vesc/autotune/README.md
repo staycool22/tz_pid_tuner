@@ -44,11 +44,16 @@ autotune/
 
 ## 运行方式
 
-在 `e:\tz_pid_tuner\vesc` 下执行：
+在 `e:\tz_pid_tuner\vesc` 下执行（推荐使用 tools 入口）：
 
 ```bash
-python -m autotune.speed_tuner.app.main --config autotune/config/default_config.yaml
-python -m autotune.position_tuner.app.main --config autotune/config/default_config.yaml
+python -m autotune.tools.speed_debug_tool --config autotune/config/default_config.yaml
+python -m autotune.tools.position_debug_tool --config autotune/config/default_config.yaml
+```
+
+前馈占位工具仍可按原入口执行：
+
+```bash
 python -m autotune.feedforward_tool.app.main --config autotune/config/default_config.yaml
 ```
 
