@@ -1,0 +1,90 @@
+can:
+  device: TZUSB2CAN
+  backend: candle
+  baud_rate: 1000000
+  dbit_baud_rate: 4000000
+  sp: 0.8
+  dsp: 0.75
+  channels: [0]
+  fd: true
+
+motor:
+  vesc_id: 32
+  pos_window_deg: [10.0, 80.0]
+  peak_current_limit_a: 15.0
+
+speed_tuner:
+  test_rpms: [2000.0]
+  trial_seconds: 20.0
+  sample_timeout_s: 0.1
+  command_hz: 10.0
+  read_hz: 300.0
+  reverse_at_pos_limits: true
+  reverse_margin_deg: 0.0
+  reverse_soft_limit_tolerance_deg: 10.0
+  steady_state_priority: false
+  steady_spike_margin_rpm: 3000.0
+  param_quantum:
+    kp: 0.00001
+    ki: 0.00001
+  initial_pi:
+    s_pid_kp: 0.00100
+    s_pid_ki: 0.00100
+  max_iterations: 8
+  improve_threshold: 0.5
+  step_scale:
+    kp: 0.50
+    ki: 0.5
+  param_limits:
+    kp_min: 0.00001
+    kp_max: 0.0500
+    ki_min: 0.0000
+    ki_max: 0.5000
+  min_valid_samples: 5
+  manual_confirm_each_iteration: true
+  kpi_weights:
+    steady_error: 0.45
+    overshoot: 0.25
+    settling_time: 0.25
+    current_efficiency: 0.05
+  # 向后兼容字段：若 initial_pi 缺失会回退使用第一组。
+  candidate_pi:
+    - s_pid_kp: 0.0010
+      s_pid_ki: 0.0000
+
+position_tuner:
+  target_positions_deg: [20,40,70.0]
+  trial_seconds: 50.0
+  sample_timeout_s: 0.05
+  command_hz: 100.0
+  read_hz: 300.0
+  ui_like_pass_through: true
+  motion_duration_s: 0.5
+  ff_rpm_bias: 0.0
+  ff_current_a: 0.0
+  initial_params:
+    p_pid_kp: 0.0100
+    p_pid_kd_proc: 0.0000
+  max_iterations: 8
+  improve_threshold: 0.2
+  manual_confirm_each_iteration: true
+  step_scale:
+    kp: 0.50
+    kd_proc: 0.20
+  param_limits:
+    kp_min: 0.0010
+    kp_max: 0.1000
+    kd_proc_min: 0.0000
+    kd_proc_max: 0.0010
+  kpi_weights:
+    position_stability: 0.35
+    load_hold: 0.20
+    step_response: 0.25
+    rebound: 0.10
+    current_efficiency: 0.10
+  # 向后兼容字段：若 initial_params 缺失会回退使用第一组。
+  candidate_params:
+    - p_pid_kp: 0.010
+      p_pid_kd_proc: 0.000
+
+output_root: runs
