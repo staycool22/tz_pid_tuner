@@ -1,0 +1,3 @@
+[submodule "can_box"]
+	path = can_box
+	url = https://github.com/Turing-zero/can-box.git
