@@ -9,34 +9,66 @@ can:
   fd: true
 
 motor:
-  vesc_id: 32
+  vesc_id: 30
+  # robotic_arm: 启用 pid_pos 角度安全窗口与速度环限位反向
+  # rotary_motor: 关闭角度安全窗口，仅保留电流限制
+  application_mode: rotary_motor
   pos_window_deg: [10.0, 80.0]
-  peak_current_limit_a: 15.0
+  peak_current_limit_a: 20.0
+  pole_pairs: 14
+  gear_ratio: 48.0
+  l_max_erpm: 50000.0
 
 speed_tuner:
-  test_rpms: [1000.0,2000.0]
-  trial_seconds: 20.0
+  test_rpms: [1000.0]
+  trial_seconds: 15.0
   sample_timeout_s: 0.1
-  command_hz: 10.0
+  command_hz: 100.0
   read_hz: 300.0
   reverse_at_pos_limits: true
   reverse_margin_deg: 0.0
   reverse_soft_limit_tolerance_deg: 10.0
+  #steady_state_priority: true 表示优先考虑稳态响应，会忽略超调等因素进行PI参数调整
   steady_state_priority: false
   steady_spike_margin_rpm: 3000.0
   param_quantum:
     kp: 0.00001
     ki: 0.00001
+  identification:
+    enabled: true
+    estimate_kind: unloaded_first_pass
+    controller_speed_unit: erpm
+    feedback_speed_unit: erpm
+    #这里设置的是是否在辨识前手动确认，false表示自动确认，true表示手动确认。
+    manual_confirm_before_identification: false
+    command_hz: 100.0
+    read_hz: 300.0
+    sample_timeout_s: 0.05
+    # 首轮辨识默认电流:
+    # 若 iq_test_a 留空，则使用 peak_current_limit_a * iq_test_ratio
+    # 这里默认 20A * 0.10 = 2.0A
+    iq_test_a: 1.5
+    #这里填写数据为电流环带宽的1/10,这里vesc固件当中电流环带宽为1000rad/s，故这里使用vesc驱动的电机应该为固定值100，
+    #但是实际使用时可能会造成电机震荡，这里需要根据实际情况调整，这个数值越小给出的kp,ki值会越小。
+    target_bandwidth_rad_s: 100 
+    #这里填写电机参数当中的额定力矩，单位为NM/A:
+    torque_constant_nm_per_a: 4.53
+  #这里设置的是单独跑规则调试时使用的pi初值，如果在机械臂等不方便进行初整定的情况时，可以使用空载时整定完成的pi值填入initial_pi进行后续rule_base微调。
   initial_pi:
-    s_pid_kp: 0.00100
-    s_pid_ki: 0.00100
+    s_pid_kp: 0.001
+    s_pid_ki: 0.004
   max_iterations: 8
   improve_threshold: 0.5
+  # auto_write_params=true 时，调试过程中会自动写入参数并自动进入下一轮；
+  # 每次写入后会回读校验，不一致则立即终止；整轮结束后会把历史最优参数带保存标志写入。
+  auto_write_params: true
+  #这里是设置的是可允许调整kp,ki的最大步长，kp,ki的步长为[kp_step, ki_step]
   step_scale:
-    kp: 0.2
-    ki: 0.2
+    kp: 0.15
+    ki: 0.15
+  #这里设置的是kp,ki的上下限，kp,ki的取值范围为[kp_min, kp_max]，[ki_min, ki_max]
   param_limits:
-    kp_min: 0.00001
+    kp_min: 0.0005
     kp_max: 0.0500
     ki_min: 0.0000
     ki_max: 0.5000
@@ -53,7 +85,7 @@ speed_tuner:
 
 position_tuner:
   target_positions_deg: [20,40,70.0]
-  trial_seconds: 50.0
+  trial_seconds: 30.0
   sample_timeout_s: 0.05
   command_hz: 100.0
   read_hz: 300.0
@@ -61,20 +93,30 @@ position_tuner:
   motion_duration_s: 0.5
   ff_rpm_bias: 0.0
   ff_current_a: 0.0
+  initial_params_formula:
+    position_interpretation: output_shaft
+    speed_bandwidth_rad_s: 25.0
+    position_to_speed_bandwidth_ratio: 8.0
+    l_max_erpm: 50000.0
+    p_pid_kd_proc: 0.0
+
   initial_params:
-    p_pid_kp: 0.0100
+    p_pid_kp: 0.04
     p_pid_kd_proc: 0.0000
-  max_iterations: 8
+  max_iterations: 3
   improve_threshold: 0.2
+  # auto_write_params=true 时，调试过程中会自动写入参数并自动进入下一轮；
+  # 每次写入后会回读校验，不一致则立即终止；整轮结束后会把历史最优参数带保存标志写入。
+  auto_write_params: true
   manual_confirm_each_iteration: true
   step_scale:
-    kp: 0.50
-    kd_proc: 0.20
+    kp: 0.20
   param_limits:
     kp_min: 0.0010
     kp_max: 0.1000
     kd_proc_min: 0.0000
     kd_proc_max: 0.0010
+  #评分权重设置
   kpi_weights:
     position_stability: 0.35
     load_hold: 0.20
@@ -85,5 +127,3 @@ position_tuner:
   candidate_params:
     - p_pid_kp: 0.010
       p_pid_kd_proc: 0.000
-
-output_root: runs

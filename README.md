@@ -7,7 +7,11 @@
 
 快速跳转：
 
-- `autotune` 详细说明：[`vesc/autotune/README.md`](vesc/autotune/README.md)
+- `autotune` 总览：[`docs/autotune_overview.md`](docs/autotune_overview.md)
+- `autotune` 流程：[`docs/autotune_workflow.md`](docs/autotune_workflow.md)
+- `autotune` 评分标准：[`docs/autotune_scoring.md`](docs/autotune_scoring.md)
+- `autotune` 速度环完整说明：[`docs/speed_tuning_full.md`](docs/speed_tuning_full.md)
+- `autotune` 位置环完整说明：[`docs/position_tuning_full.md`](docs/position_tuning_full.md)
 
 ## 目录总览
 
@@ -26,8 +30,10 @@ tz_pid_tuner/
 
 ## PID 自整定方法
 
-`vesc/autotune` 采用规则式迭代整定（rule-based）：
+`vesc/autotune` 当前采用“首轮初值生成 + 规则式迭代微调”的流程：
 
+- 速度环可先基于 `Kt / J / B` 辨识生成首轮 PI，再进入 rule-based 微调。
+- 位置环可先基于速度环带宽推导首轮参数，再执行目标点采样与 rule-based 微调。
 - 每轮使用当前参数执行一组目标点试验并采样原始数据。
 - 从采样中计算指标（误差、超调、响应时间、电流效率等）。
 - 按加权评分选择更优方向，给出下一轮参数建议。
@@ -52,7 +58,28 @@ tz_pid_tuner/
 
 详细实现说明见：
 
-- `vesc/autotune/README.md`
+- `docs/autotune_overview.md`
+- `docs/autotune_workflow.md`
+- `docs/autotune_scoring.md`
+- `docs/speed_tuning_full.md`
+- `docs/position_tuning_full.md`
+
+## 文档指引
+
+建议按以下顺序阅读文档：
+
+1. `docs/autotune_overview.md`
+   - 先了解模块划分、运行入口、配置入口和输出产物。
+2. `docs/autotune_workflow.md`
+   - 再理解整个工程如何从速度环走到位置环和前馈。
+3. `docs/autotune_scoring.md`
+   - 需要解释 trial 分数、稳态判定和加权规则时查看。
+4. `docs/speed_tuning_full.md`
+   - 需要深入速度环首轮辨识、极点对消模型和微调逻辑时查看。
+5. `docs/position_tuning_full.md`
+   - 需要深入位置环模型、`pass_through` 映射和微调逻辑时查看。
+
+文档入口统一收敛在本文件，`docs/` 
 
 ## 工具使用说明
 
@@ -89,7 +116,7 @@ python -m autotune.feedforward_tool.app.main --config autotune/config/default_co
 
 ## 使用建议
 
-- 每轮建议参数需人工写入 VESC 后再继续。
+- 默认配置已开启自动写参；如关闭 `auto_write_params`，可切回每轮人工确认模式。
 - 优先确保 CAN 通信、VESC ID、状态上报正常。
 - 调参期间避免触碰机械限位，关注电流保护日志。
 - `runs/` 为运行产物，默认不建议提交到仓库。

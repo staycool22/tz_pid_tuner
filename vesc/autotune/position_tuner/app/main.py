@@ -25,18 +25,24 @@ def main() -> None:
     run_root = (Path(__file__).resolve().parents[3] / cfg.output_root_path).resolve()
     run_dir = new_run_dir(run_root, "position_tuner")
 
-    best_params, trials = run_position_tuning(cfg, run_dir=run_dir)
+    best_params, trials, initial_params_details = run_position_tuning(cfg, run_dir=run_dir)
     best_trial = min(trials, key=lambda x: float(x.get("score", 1e9))) if trials else {}
     best_pos_stability = float(best_trial.get("agg_metrics", {}).get("position_stability", 1e9))
-    recommend_speed_retune = best_pos_stability > 0.02
+    recommend_speed_retune = best_pos_stability > 0.01
     write_json(run_dir / "best_params.json", best_params)
     write_json(
         run_dir / "session_meta.json",
         {
             "tuner": "position_tuner",
             "vesc_id": cfg.motor.vesc_id,
+            "application_mode": cfg.motor.application_mode,
+            "pole_pairs": cfg.motor.pole_pairs,
+            "gear_ratio": cfg.motor.gear_ratio,
+            "l_max_erpm": cfg.motor.l_max_erpm,
             "target_positions_deg": cfg.position_tuner.target_positions_deg,
+            "initial_params_formula": cfg.position_tuner.initial_params_formula,
             "initial_params": cfg.position_tuner.initial_params,
+            "resolved_initial_params": initial_params_details,
             "command_hz": cfg.position_tuner.command_hz,
             "read_hz": cfg.position_tuner.read_hz,
             "ui_like_pass_through": cfg.position_tuner.ui_like_pass_through,
@@ -45,6 +51,7 @@ def main() -> None:
             "ff_current_a": cfg.position_tuner.ff_current_a,
             "max_iterations": cfg.position_tuner.max_iterations,
             "improve_threshold": cfg.position_tuner.improve_threshold,
+            "auto_write_params": cfg.position_tuner.auto_write_params,
             "pos_window_deg": cfg.motor.pos_window_deg,
             "allowed_cmd": "send_pass_through",
         },

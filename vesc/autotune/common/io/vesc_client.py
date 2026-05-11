@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import sys
 import threading
 from pathlib import Path
@@ -32,6 +33,8 @@ class VESCBusClient:
         self._vesc: Optional[VESC_CAN] = None
         self._bus_channel = int(self.can_cfg.channels[0])
         self._io_lock = threading.Lock()
+        self._last_written_speed_pi: Optional[tuple[float, float, bool]] = None
+        self._last_written_position_params: Optional[tuple[float, float, bool]] = None
 
     def open(self) -> None:
         open_kwargs = {
@@ -53,6 +56,14 @@ class VESCBusClient:
         if bus is None:
             raise RuntimeError(f"通道打开失败: {self._bus_channel}")
         self._vesc = VESC_CAN(self._tx_cls(bus))
+        dsp_text = f"{self.can_cfg.dsp}" if self.can_cfg.fd else "N/A"
+        print(
+            "[vesc_bus] CAN 已打开: "
+            f"device={self.can_cfg.device}, backend={self.can_cfg.backend}, channel={self._bus_channel}, "
+            f"fd={int(bool(self.can_cfg.fd))}, baud={self.can_cfg.baud_rate}, dbit_baud={self.can_cfg.dbit_baud_rate}, "
+            f"sp={self.can_cfg.sp}, dsp={dsp_text}, ext_frame=1"
+        )
+        print("[vesc_bus] VESC 命令帧按扩展帧发送；TZUSB2CAN 打开参数使用配置中的 sp/dsp。")
 
     def close(self) -> None:
         if self._tx_cls is not None and self._m_dev is not None:
@@ -60,6 +71,8 @@ class VESCBusClient:
         self._tx_cls = None
         self._m_dev = None
         self._vesc = None
+        self._last_written_speed_pi = None
+        self._last_written_position_params = None
 
     def __enter__(self) -> "VESCBusClient":
         self.open()
@@ -72,9 +85,61 @@ class VESCBusClient:
         with self._io_lock:
             self._must_ready().send_rpm(self.motor_cfg.vesc_id, rpm)
 
+    def send_current(self, current_a: float) -> None:
+        with self._io_lock:
+            self._must_ready().send_current(self.motor_cfg.vesc_id, current_a)
+
     def send_pass_through(self, pos_deg: float, rpm: float, current_a: float) -> None:
         with self._io_lock:
             self._must_ready().send_pass_through(self.motor_cfg.vesc_id, pos_deg, rpm, current_a)
+
+    def _write_and_verify_pid_parameter(
+        self,
+        param_type: int | str,
+        value: float,
+        save: bool,
+        verify_timeout_s: float = 0.5,
+    ) -> None:
+        vesc = self._must_ready()
+        vesc.send_pid_parameter(self.motor_cfg.vesc_id, param_type, float(value), save=bool(save))
+        _, payload = vesc.receive_pid_parameter(
+            self.motor_cfg.vesc_id,
+            param_type,
+            timeout=verify_timeout_s,
+        )
+        if payload is None:
+            raise RuntimeError(f"PID 参数回读超时: param_type={param_type}")
+        echoed_value = float(payload["value"])
+        echoed_save = bool(payload["save"])
+        if not math.isclose(echoed_value, float(value), rel_tol=0.0, abs_tol=1e-6):
+            raise RuntimeError(
+                f"PID 参数回读不一致: param_type={param_type}, expected={float(value):.6f}, actual={echoed_value:.6f}"
+            )
+        if echoed_save != bool(save):
+            raise RuntimeError(
+                f"PID 保存标志回读不一致: param_type={param_type}, expected_save={bool(save)}, actual_save={echoed_save}"
+            )
+
+    def write_speed_pi(self, kp: float, ki: float, save_to_flash: bool = False) -> bool:
+        with self._io_lock:
+            target = (float(kp), float(ki), bool(save_to_flash))
+            if self._last_written_speed_pi == target:
+                return False
+            self._write_and_verify_pid_parameter("speed_kp", float(kp), save=False)
+            self._write_and_verify_pid_parameter("speed_ki", float(ki), save=bool(save_to_flash))
+            self._last_written_speed_pi = target
+            return True
+
+    def write_position_params(self, kp: float, kd_proc: float, save_to_flash: bool = False) -> bool:
+        with self._io_lock:
+            target = (float(kp), float(kd_proc), bool(save_to_flash))
+            if self._last_written_position_params == target:
+                return False
+            self._write_and_verify_pid_parameter("position_kp", float(kp), save=False)
+            # 当前协议仅暴露 position_kd 通道，这里按现有调参流程将 p_pid_kd_proc 映射到该通道。
+            self._write_and_verify_pid_parameter("position_kd", float(kd_proc), save=bool(save_to_flash))
+            self._last_written_position_params = target
+            return True
 
     def receive_decode(self, timeout_s: float) -> Optional[VESC_PACK]:
         with self._io_lock:

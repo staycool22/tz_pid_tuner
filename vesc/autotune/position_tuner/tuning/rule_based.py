@@ -9,6 +9,7 @@ from autotune.common.analysis.metrics import evaluate_position_trial, weighted_s
 from autotune.common.config.models import RunConfig
 from autotune.common.io.vesc_client import VESCBusClient
 from autotune.common.safety.guard import SafetyGuard, SafetyLimits, SafetyViolation
+from autotune.position_tuner.tuning.initial_params import resolve_initial_position_params
 
 
 def _run_single_position_trial(
@@ -36,7 +37,7 @@ def _run_single_position_trial(
         safe_cur = min(max(float(current_a), 0.0), 65.535)
         return safe_pos, safe_rpm, safe_cur
 
-    def _drain_feedback(first_timeout_s: float, max_reads: int) -> Optional[float]:
+    def _drain_feedback(first_timeout_s: float, max_reads: int, record: bool) -> Optional[float]:
         latest_pos: Optional[float] = None
         reads = 0
         while reads < max_reads:
@@ -49,12 +50,18 @@ def _run_single_position_trial(
                 guard.validate_feedback(pid_pos_now_deg=float(pack.pid_pos_now), current_a=float(pack.current))
             except SafetyViolation as exc:
                 raise exc
-            pos_now = float(pack.pid_pos_now)
-            recorder.append(rpm=float(pack.rpm), current_a=float(pack.current), pos_deg=pos_now)
+            pos_now = guard.normalize_feedback_angle(float(pack.pid_pos_now))
+            if record:
+                recorder.append(rpm=float(pack.rpm), current_a=float(pack.current), pos_deg=pos_now)
             latest_pos = pos_now
         return latest_pos
 
-    latest_pos = _drain_feedback(first_timeout_s=min(sample_timeout_s, read_period_s), max_reads=max_drain_reads)
+    # 新目标开始前先清掉上一目标遗留反馈，但不把这段过渡数据记入当前 trial。
+    latest_pos = _drain_feedback(
+        first_timeout_s=min(sample_timeout_s, read_period_s),
+        max_reads=max_drain_reads,
+        record=False,
+    )
     cmd_pos_seed = float(latest_pos) if latest_pos is not None else float(target_pos_deg)
     start = time.perf_counter()
     next_send_tick = start
@@ -86,6 +93,7 @@ def _run_single_position_trial(
                 latest_pos = _drain_feedback(
                     first_timeout_s=min(sample_timeout_s, read_period_s),
                     max_reads=max_drain_reads,
+                    record=True,
                 )
                 next_send_tick += send_period_s
                 remain = next_send_tick - time.perf_counter()
@@ -108,13 +116,11 @@ def _clamp(value: float, v_min: float, v_max: float) -> float:
     return max(v_min, min(v_max, value))
 
 
-def _build_initial_params(config: RunConfig) -> Dict[str, float]:
-    initial = dict(config.position_tuner.initial_params)
-    if not initial and config.position_tuner.candidate_params:
-        initial = dict(config.position_tuner.candidate_params[0])
-    if "p_pid_kp" not in initial or "p_pid_kd_proc" not in initial:
-        raise ValueError("position_tuner.initial_params 必须包含 p_pid_kp 和 p_pid_kd_proc")
-    return initial
+def _build_initial_params(config: RunConfig) -> Tuple[Dict[str, float], Dict[str, object]]:
+    initial_params, details = resolve_initial_position_params(config)
+    if "p_pid_kp" not in initial_params or "p_pid_kd_proc" not in initial_params:
+        raise ValueError("位置环初始参数必须包含 p_pid_kp 和 p_pid_kd_proc")
+    return initial_params, details
 
 
 def _next_position_params(
@@ -136,7 +142,7 @@ def _next_position_params(
 
     rebound_high = rebound > 2.0
     too_slow = step_response > trial_seconds * 0.75
-    hold_error_high = position_stability > 0.02
+    hold_error_high = position_stability > 0.01
 
     if rebound_high:
         kd_proc *= 1.0 + step_kd
@@ -157,27 +163,46 @@ def _next_position_params(
     return {"p_pid_kp": kp, "p_pid_kd_proc": kd_proc}
 
 
-def run_position_tuning(config: RunConfig, run_dir: Path) -> Tuple[Dict[str, float], List[Dict[str, float]]]:
+def run_position_tuning(
+    config: RunConfig,
+    run_dir: Path,
+) -> Tuple[Dict[str, float], List[Dict[str, float]], Dict[str, object]]:
     limits = SafetyLimits(
         pos_min_deg=float(config.motor.pos_window_deg[0]),
         pos_max_deg=float(config.motor.pos_window_deg[1]),
         peak_current_limit_a=float(config.motor.peak_current_limit_a),
+        enforce_position_limits=bool(config.motor.uses_position_limits),
     )
     guard = SafetyGuard(limits)
 
     all_trials: List[Dict[str, float]] = []
     best_params: Dict[str, float] = {}
     best_score = float("inf")
-    current_params = _build_initial_params(config)
+    current_params, initial_params_details = _build_initial_params(config)
     no_improve_rounds = 0
 
     with VESCBusClient(config.can, config.motor) as client:
+        print(
+            "[position_tuner] 初始参数来源: "
+            f"{initial_params_details.get('source', 'unknown')}, "
+            f"kp={current_params['p_pid_kp']:.8f}, kd_proc={current_params['p_pid_kd_proc']:.8f}"
+        )
         for idx in range(int(config.position_tuner.max_iterations)):
             print(
                 f"[position_tuner][iter {idx}] params: "
                 f"kp={current_params['p_pid_kp']:.8f}, kd_proc={current_params['p_pid_kd_proc']:.8f}"
             )
-            if config.position_tuner.manual_confirm_each_iteration:
+            if bool(config.position_tuner.auto_write_params):
+                wrote_params = client.write_position_params(
+                    kp=float(current_params["p_pid_kp"]),
+                    kd_proc=float(current_params["p_pid_kd_proc"]),
+                    save_to_flash=False,
+                )
+                if wrote_params:
+                    print("[position_tuner] 已自动写入 p_pid_kp / p_pid_kd_proc。")
+                else:
+                    print("[position_tuner] 当前 p_pid_kp / p_pid_kd_proc 与上次写入一致，跳过重复写入。")
+            elif config.position_tuner.manual_confirm_each_iteration:
                 user_in = input(
                     "[position_tuner] 请先把以上参数人工写入 VESC，再按回车继续；输入 q 终止: "
                 ).strip().lower()
@@ -245,8 +270,19 @@ def run_position_tuning(config: RunConfig, run_dir: Path) -> Tuple[Dict[str, flo
             current_params = next_params
             if no_improve_rounds >= 2:
                 print("[position_tuner] 连续改进不足，提前停止。")
-                if float(agg_metrics.get("position_stability", 1e9)) > 0.02:
+                if float(agg_metrics.get("position_stability", 1e9)) > 0.01:
                     print("[position_tuner] 位置误差仍大于 0.02°，建议先回退并重新整定速度环后再继续位置环。")
                 break
 
-    return best_params, all_trials
+        if bool(config.position_tuner.auto_write_params) and best_params:
+            client.write_position_params(
+                kp=float(best_params["p_pid_kp"]),
+                kd_proc=float(best_params["p_pid_kd_proc"]),
+                save_to_flash=True,
+            )
+            print(
+                "[position_tuner] 已将历史最优参数保存写入: "
+                f"kp={best_params['p_pid_kp']:.8f}, kd_proc={best_params['p_pid_kd_proc']:.8f}"
+            )
+
+    return best_params, all_trials, initial_params_details

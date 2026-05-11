@@ -6,6 +6,7 @@ from pathlib import Path
 from autotune.common.acquisition.recorder import new_run_dir, write_json
 from autotune.common.config.loader import load_run_config
 from autotune.common.reporting.report_writer import write_summary_md
+from autotune.speed_tuner.tuning.identification import run_initial_pi_identification
 from autotune.speed_tuner.tuning.rule_based import run_speed_tuning
 
 
@@ -25,7 +26,11 @@ def main() -> None:
     run_root = (Path(__file__).resolve().parents[3] / cfg.output_root_path).resolve()
     run_dir = new_run_dir(run_root, "speed_tuner")
 
-    best_params, trials = run_speed_tuning(cfg, run_dir=run_dir)
+    identification_result = run_initial_pi_identification(cfg, run_dir=run_dir)
+    if identification_result:
+        cfg.speed_tuner.initial_pi_formula = dict(identification_result.get("formula", {}))
+
+    best_params, trials, initial_pi_details = run_speed_tuning(cfg, run_dir=run_dir)
     if not trials:
         raise RuntimeError("未产生有效试验轮次，请检查人工确认流程或设备连接状态。")
     write_json(run_dir / "best_params.json", best_params)
@@ -34,6 +39,9 @@ def main() -> None:
         {
             "tuner": "speed_tuner",
             "vesc_id": cfg.motor.vesc_id,
+            "application_mode": cfg.motor.application_mode,
+            "pole_pairs": cfg.motor.pole_pairs,
+            "gear_ratio": cfg.motor.gear_ratio,
             "test_rpms": cfg.speed_tuner.test_rpms,
             "command_hz": cfg.speed_tuner.command_hz,
             "read_hz": cfg.speed_tuner.read_hz,
@@ -43,9 +51,14 @@ def main() -> None:
             "steady_state_priority": cfg.speed_tuner.steady_state_priority,
             "steady_spike_margin_rpm": cfg.speed_tuner.steady_spike_margin_rpm,
             "param_quantum": cfg.speed_tuner.param_quantum,
+            "identification": cfg.speed_tuner.identification,
+            "identification_result": identification_result,
+            "initial_pi_formula": cfg.speed_tuner.initial_pi_formula,
             "initial_pi": cfg.speed_tuner.initial_pi,
+            "resolved_initial_pi": initial_pi_details,
             "max_iterations": cfg.speed_tuner.max_iterations,
             "improve_threshold": cfg.speed_tuner.improve_threshold,
+            "auto_write_params": cfg.speed_tuner.auto_write_params,
             "manual_confirm_each_iteration": cfg.speed_tuner.manual_confirm_each_iteration,
             "min_valid_samples": cfg.speed_tuner.min_valid_samples,
             "pos_window_deg": cfg.motor.pos_window_deg,
