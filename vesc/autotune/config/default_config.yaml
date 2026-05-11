@@ -1,22 +1,22 @@
 can:
   device: TZUSB2CAN
   backend: candle
-  baud_rate: 1000000
+  baud_rate: 500000
   dbit_baud_rate: 4000000
   sp: 0.8
   dsp: 0.75
   channels: [0]
-  fd: true
+  fd: false
 
 motor:
-  vesc_id: 30
+  vesc_id: 45
   # robotic_arm: 启用 pid_pos 角度安全窗口与速度环限位反向
   # rotary_motor: 关闭角度安全窗口，仅保留电流限制
   application_mode: rotary_motor
   pos_window_deg: [10.0, 80.0]
   peak_current_limit_a: 20.0
   pole_pairs: 14
-  gear_ratio: 48.0
+  gear_ratio: 1.0
   l_max_erpm: 50000.0
 
 speed_tuner:
@@ -35,8 +35,11 @@ speed_tuner:
     kp: 0.00001
     ki: 0.00001
   identification:
-    enabled: true
+    enabled: false
     estimate_kind: unloaded_first_pass
+    # true 时：辨识完成后，按极点对消法生成一组速度环初始参数并直接退出，不进入后续 rule-based 微调。
+    exit_after_parameter_generation: false
+    parameter_generation_method: pole_cancellation_pi
     controller_speed_unit: erpm
     feedback_speed_unit: erpm
     #这里设置的是是否在辨识前手动确认，false表示自动确认，true表示手动确认。
@@ -47,25 +50,33 @@ speed_tuner:
     # 首轮辨识默认电流:
     # 若 iq_test_a 留空，则使用 peak_current_limit_a * iq_test_ratio
     # 这里默认 20A * 0.10 = 2.0A
-    iq_test_a: 1.5
+    iq_test_a: 0.17
     #这里填写数据为电流环带宽的1/10,这里vesc固件当中电流环带宽为1000rad/s，故这里使用vesc驱动的电机应该为固定值100，
     #但是实际使用时可能会造成电机震荡，这里需要根据实际情况调整，这个数值越小给出的kp,ki值会越小。
     target_bandwidth_rad_s: 100 
     #这里填写电机参数当中的额定力矩，单位为NM/A:
-    torque_constant_nm_per_a: 4.53
+    torque_constant_nm_per_a: 0.8
   #这里设置的是单独跑规则调试时使用的pi初值，如果在机械臂等不方便进行初整定的情况时，可以使用空载时整定完成的pi值填入initial_pi进行后续rule_base微调。
   initial_pi:
-    s_pid_kp: 0.001
-    s_pid_ki: 0.004
-  max_iterations: 8
+    s_pid_kp: 0.0005
+    s_pid_ki: 0.00045
+  # 兼容旧单阶段模式：当 coarse_iterations / fine_iterations 都为 0 时，回退使用 max_iterations。
+  max_iterations: 5
+  # 单次运行内先做 15 轮粗调，再自动以历史最优参数为起点做 5 轮精调。
+  coarse_iterations: 15
+  fine_iterations: 5
   improve_threshold: 0.5
   # auto_write_params=true 时，调试过程中会自动写入参数并自动进入下一轮；
   # 每次写入后会回读校验，不一致则立即终止；整轮结束后会把历史最优参数带保存标志写入。
-  auto_write_params: true
+  auto_write_params: false
   #这里是设置的是可允许调整kp,ki的最大步长，kp,ki的步长为[kp_step, ki_step]
   step_scale:
-    kp: 0.15
-    ki: 0.15
+    kp: 1
+    ki: 1
+  # 精调阶段使用更小步长，避免在较优区间内跨步过大。
+  fine_step_scale:
+    kp: 0.35
+    ki: 0.35
   #这里设置的是kp,ki的上下限，kp,ki的取值范围为[kp_min, kp_max]，[ki_min, ki_max]
   param_limits:
     kp_min: 0.0005
@@ -75,16 +86,16 @@ speed_tuner:
   min_valid_samples: 5
   manual_confirm_each_iteration: true
   kpi_weights:
-    steady_error: 0.55
+    steady_error: 0.6
     overshoot: 0.15
     settling_time: 0.25
-    current_efficiency: 0.05
+    current_efficiency: 0.00
   candidate_pi:
     - s_pid_kp: 0.0010
       s_pid_ki: 0.0000
 
 position_tuner:
-  target_positions_deg: [20,40,70.0]
+  target_positions_deg: [40,70.0]
   trial_seconds: 30.0
   sample_timeout_s: 0.05
   command_hz: 100.0
@@ -110,7 +121,7 @@ position_tuner:
   auto_write_params: true
   manual_confirm_each_iteration: true
   step_scale:
-    kp: 0.20
+    kp: 0.50
   param_limits:
     kp_min: 0.0010
     kp_max: 0.1000
@@ -118,11 +129,11 @@ position_tuner:
     kd_proc_max: 0.0010
   #评分权重设置
   kpi_weights:
-    position_stability: 0.35
+    position_stability: 0.45
     load_hold: 0.20
     step_response: 0.25
     rebound: 0.10
-    current_efficiency: 0.10
+    current_efficiency: 0.0
   # 向后兼容字段：若 initial_params 缺失会回退使用第一组。
   candidate_params:
     - p_pid_kp: 0.010

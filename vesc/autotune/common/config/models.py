@@ -56,6 +56,8 @@ class SpeedTuneConfig:
         default_factory=lambda: {
             "enabled": False,
             "estimate_kind": "unloaded_first_pass",
+            "exit_after_parameter_generation": False,
+            "parameter_generation_method": "pole_cancellation_pi",
             "controller_speed_unit": "erpm",
             "feedback_speed_unit": "erpm",
             "manual_confirm_before_identification": True,
@@ -92,8 +94,11 @@ class SpeedTuneConfig:
     initial_pi_formula: Dict[str, Any] = field(default_factory=dict)
     initial_pi: Dict[str, float] = field(default_factory=lambda: {"s_pid_kp": 0.0010, "s_pid_ki": 0.0000})
     max_iterations: int = 8
+    coarse_iterations: int = 0
+    fine_iterations: int = 0
     improve_threshold: float = 0.5
     step_scale: Dict[str, float] = field(default_factory=lambda: {"kp": 0.10, "ki": 0.15})
+    fine_step_scale: Dict[str, float] = field(default_factory=lambda: {"kp": 0.03, "ki": 0.05})
     param_limits: Dict[str, float] = field(
         default_factory=lambda: {
             "kp_min": 0.0001,
@@ -213,6 +218,10 @@ class RunConfig:
         speed_tuner_data["step_scale"] = _merge_default_dict(
             speed_defaults.step_scale,
             speed_tuner_data.get("step_scale"),
+        )
+        speed_tuner_data["fine_step_scale"] = _merge_default_dict(
+            speed_defaults.fine_step_scale,
+            speed_tuner_data.get("fine_step_scale"),
         )
         speed_tuner_data["param_limits"] = _merge_default_dict(
             speed_defaults.param_limits,

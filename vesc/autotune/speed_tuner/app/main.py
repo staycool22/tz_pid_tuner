@@ -10,29 +10,25 @@ from autotune.speed_tuner.tuning.identification import run_initial_pi_identifica
 from autotune.speed_tuner.tuning.rule_based import run_speed_tuning
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="pass_through 速度环独立整定程序（仅 send_rpm）")
-    parser.add_argument(
-        "--config",
-        default=str(Path(__file__).resolve().parents[3] / "config" / "default_config.yaml"),
-        help="配置文件路径（yaml/json）",
+def _build_total_iterations(cfg) -> int:
+    return (
+        int(cfg.speed_tuner.coarse_iterations) + int(cfg.speed_tuner.fine_iterations)
+        if int(cfg.speed_tuner.coarse_iterations) > 0 or int(cfg.speed_tuner.fine_iterations) > 0
+        else int(cfg.speed_tuner.max_iterations)
     )
-    return parser.parse_args()
 
 
-def main() -> None:
-    args = parse_args()
-    cfg = load_run_config(args.config)
-    run_root = (Path(__file__).resolve().parents[3] / cfg.output_root_path).resolve()
-    run_dir = new_run_dir(run_root, "speed_tuner")
-
-    identification_result = run_initial_pi_identification(cfg, run_dir=run_dir)
-    if identification_result:
-        cfg.speed_tuner.initial_pi_formula = dict(identification_result.get("formula", {}))
-
-    best_params, trials, initial_pi_details = run_speed_tuning(cfg, run_dir=run_dir)
-    if not trials:
-        raise RuntimeError("未产生有效试验轮次，请检查人工确认流程或设备连接状态。")
+def _write_speed_tuner_outputs(
+    cfg,
+    run_dir: Path,
+    identification_result,
+    initial_pi_details,
+    best_params,
+    trials,
+    current_symptom,
+    likely_causes,
+    suggest_steps,
+) -> None:
     write_json(run_dir / "best_params.json", best_params)
     write_json(
         run_dir / "session_meta.json",
@@ -57,10 +53,15 @@ def main() -> None:
             "initial_pi": cfg.speed_tuner.initial_pi,
             "resolved_initial_pi": initial_pi_details,
             "max_iterations": cfg.speed_tuner.max_iterations,
+            "coarse_iterations": cfg.speed_tuner.coarse_iterations,
+            "fine_iterations": cfg.speed_tuner.fine_iterations,
+            "total_iterations": _build_total_iterations(cfg),
             "improve_threshold": cfg.speed_tuner.improve_threshold,
             "auto_write_params": cfg.speed_tuner.auto_write_params,
             "manual_confirm_each_iteration": cfg.speed_tuner.manual_confirm_each_iteration,
             "min_valid_samples": cfg.speed_tuner.min_valid_samples,
+            "step_scale": cfg.speed_tuner.step_scale,
+            "fine_step_scale": cfg.speed_tuner.fine_step_scale,
             "pos_window_deg": cfg.motor.pos_window_deg,
             "current_forced_zero": True,
             "allowed_cmd": "send_rpm",
@@ -71,16 +72,74 @@ def main() -> None:
 
     write_summary_md(
         path=run_dir / "summary.md",
+        current_symptom=current_symptom,
+        likely_causes=likely_causes,
+        manual_check_items=["s_pid_min_erpm", "s_pid_allow_braking", "l_current_max_scale", "current 前馈是否为零"],
+        suggest_steps=suggest_steps,
+        acceptance=["速度稳态误差下降", "无明显持续振荡", "峰值电流不越界", "位置保持稳定"],
+        best_params=best_params,
+    )
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="pass_through 速度环独立整定程序（仅 send_rpm）")
+    parser.add_argument(
+        "--config",
+        default=str(Path(__file__).resolve().parents[3] / "config" / "default_config.yaml"),
+        help="配置文件路径（yaml/json）",
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    cfg = load_run_config(args.config)
+    run_root = (Path(__file__).resolve().parents[3] / cfg.output_root_path).resolve()
+    run_dir = new_run_dir(run_root, "speed_tuner")
+
+    identification_result = run_initial_pi_identification(cfg, run_dir=run_dir)
+    if identification_result:
+        cfg.speed_tuner.initial_pi_formula = dict(identification_result.get("formula", {}))
+    if identification_result and bool(cfg.speed_tuner.identification.get("exit_after_parameter_generation", False)):
+        best_params = dict(identification_result.get("generated_speed_pi", {}))
+        initial_pi_details = dict(identification_result.get("generated_speed_pi_details", {}))
+        if not best_params:
+            raise RuntimeError("辨识后未生成有效速度环初值参数。")
+        _write_speed_tuner_outputs(
+            cfg=cfg,
+            run_dir=run_dir,
+            identification_result=identification_result,
+            initial_pi_details=initial_pi_details,
+            best_params=best_params,
+            trials=[],
+            current_symptom=["已完成辨识，并通过极点对消法生成速度环初始参数。"],
+            likely_causes=["当前模式仅输出辨识生成参数，不进入后续 rule-based 自动微调。"],
+            suggest_steps=[
+                "将生成的 s_pid_kp / s_pid_ki 作为带载测试的起始参数。",
+                "后续带载测试后，再视响应情况决定是否进入两阶段自动微调。",
+                "若带载后超调偏大，可优先下调 s_pid_kp；若稳态误差偏大，可再评估 s_pid_ki。",
+            ],
+        )
+        print(f"[speed_tuner] 已按辨识后直接退出模式完成，输出目录: {run_dir}")
+        return
+
+    best_params, trials, initial_pi_details = run_speed_tuning(cfg, run_dir=run_dir)
+    if not trials:
+        raise RuntimeError("未产生有效试验轮次，请检查人工确认流程或设备连接状态。")
+    _write_speed_tuner_outputs(
+        cfg=cfg,
+        run_dir=run_dir,
+        identification_result=identification_result,
+        initial_pi_details=initial_pi_details,
+        best_params=best_params,
+        trials=trials,
         current_symptom=["已完成速度设定点响应采样、自动迭代评分与参数更新建议。"],
         likely_causes=["速度稳态误差、超调与收敛速度主要受 s_pid_kp / s_pid_ki 组合影响。"],
-        manual_check_items=["s_pid_min_erpm", "s_pid_allow_braking", "l_current_max_scale", "current 前馈是否为零"],
         suggest_steps=[
             "保持 current=0，按每轮建议参数人工写入 s_pid_kp / s_pid_ki 并复测。",
             "若低速抖动上升或超调增大，优先减小 s_pid_kp，并抑制 s_pid_ki 增长。",
             "确认整个测试期间 pid_pos 始终处于 5°-85°。",
         ],
-        acceptance=["速度稳态误差下降", "无明显持续振荡", "峰值电流不越界", "位置保持稳定"],
-        best_params=best_params,
     )
     print(f"[speed_tuner] 完成，输出目录: {run_dir}")
 

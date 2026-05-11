@@ -142,7 +142,7 @@ def _next_position_params(
 
     rebound_high = rebound > 2.0
     too_slow = step_response > trial_seconds * 0.75
-    hold_error_high = position_stability > 0.01
+    hold_error_high = position_stability > 0.02
 
     if rebound_high:
         kd_proc *= 1.0 + step_kd
@@ -270,7 +270,7 @@ def run_position_tuning(
             current_params = next_params
             if no_improve_rounds >= 2:
                 print("[position_tuner] 连续改进不足，提前停止。")
-                if float(agg_metrics.get("position_stability", 1e9)) > 0.01:
+                if float(agg_metrics.get("position_stability", 1e9)) > 0.02:
                     print("[position_tuner] 位置误差仍大于 0.02°，建议先回退并重新整定速度环后再继续位置环。")
                 break
 

@@ -1,6 +1,6 @@
 # 速度环整定完整说明
 
-本文档面向 `autotune/speed_tuner`，完整说明速度环初值构造、极点对消模型、首轮辨识流程、rule-based 微调逻辑和运行产物。
+本文档面向 `autotune/speed_tuner`，完整说明速度环初值构造、极点对消模型、首轮辨识流程、分阶段 rule-based 微调逻辑和运行产物。
 
 返回总工程说明：[`../README.md`](../README.md)
 
@@ -10,7 +10,7 @@
 
 1. 首轮 `s_pid_kp / s_pid_ki` 是怎么来的
 2. 为什么这里采用极点对消模型
-3. 代码里如何把辨识、建模、换算和微调串起来
+3. 代码里如何把辨识、建模、换算和分阶段微调串起来
 4. 评分结果和下一轮参数建议分别由什么驱动
 
 ## 适用前提
@@ -53,19 +53,17 @@ rad/s -> rpm 或 erpm
 再量化到配置步长
                 |
                 v
-[写入当前 PI 并执行 trial]
-send_rpm
-记录 rpm / current / pos
+[可选分支 A：辨识后直接输出参数并退出]
+生成 `generated_speed_pi`
+写入 result.json / summary.md
                 |
                 v
-[计算指标与评分]
-steady_error / overshoot / settling_time / current_efficiency
-                |
-                v
-[rule-based 更新下一轮 PI]
-                |
-                v
-[保存历史最优参数与摘要]
+[可选分支 B：继续执行分阶段微调]
+粗调阶段 -> 精调阶段
+每轮 trial 记录 rpm / current / pos
+计算指标与评分
+rule-based 更新下一轮 PI
+保存历史最优参数与摘要
 ```
 
 ## 速度环对象模型
@@ -170,7 +168,7 @@ Ki = B * wb / Kt
 所以代码里的完整流程是：
 
 ```text
-首轮模型给初值 -> 实机 trial -> 评分 -> rule-based 微调
+首轮模型给初值 -> 实机 trial -> 评分 -> 分阶段 rule-based 微调
 ```
 
 ## 首轮辨识流程拆解
@@ -267,6 +265,11 @@ wb = 1 / target_time_constant_s
 - 参数上下限裁剪
 - 量化到 `param_quantum`
 
+若开启 `identification.exit_after_parameter_generation`：
+
+- 该初始 PI 会直接写入 `identification/result.json`
+- 程序直接退出，不进入后续试验轮次
+
 ## 运行时流程拆解
 
 ### 阶段 1：建立安全边界
@@ -318,6 +321,15 @@ trials/trial_XXX_YYYYrpm_raw.csv
 
 再按 `kpi_weights` 做加权求和。
 
+默认权重以 `autotune/config/default_config.yaml` 为准，目前速度环默认：
+
+```text
+steady_error: 0.60
+overshoot: 0.15
+settling_time: 0.25
+current_efficiency: 0.00
+```
+
 评分细节见：[`autotune_scoring.md`](autotune_scoring.md)
 
 ### 阶段 5：rule-based 微调
@@ -334,6 +346,13 @@ trials/trial_XXX_YYYYrpm_raw.csv
 - 明显偏向先把误差压下来
 - 对 `ki` 调整较积极
 - 通过 `signed_steady_error` 区分“只是尖峰超调”还是“稳态已经超目标”
+
+当前实现支持单次运行内的两阶段微调：
+
+- 粗调阶段：使用 `step_scale` 做较大步长搜索，优先把参数推入可用区间
+- 精调阶段：使用 `fine_step_scale`，并从历史最优参数重新起步做局部细化
+- 若未配置 `coarse_iterations / fine_iterations`，则回退到旧的单阶段 `max_iterations` 模式
+- 每轮 `trial_XXX_metrics.json` 会额外记录 `stage`、`stage_iteration`、`stage_step_scale`
 
 ### 阶段 6：避免重复候选
 
@@ -352,6 +371,12 @@ trials/trial_XXX_YYYYrpm_raw.csv
 3. 在自动写参模式下把这组参数保存写回 VESC
 4. 生成 `summary.md`
 
+如果运行在“辨识后直接退出”模式：
+
+- 不会进入 trial 采样与评分阶段
+- `best_params.json` 会直接保存辨识生成的极点对消 PI
+- `trials/all_trials.json` 为空列表
+
 ## 典型产物
 
 一次速度环运行通常会得到：
@@ -361,9 +386,10 @@ trials/trial_XXX_YYYYrpm_raw.csv
 3. `summary.md`
 4. `trials/trial_XXX_metrics.json`
 5. `trials/trial_XXX_YYYYrpm_raw.csv`
-6. `identification/j_plus_raw.csv`
-7. `identification/j_minus_raw.csv`
-8. `identification/b_coast_down_raw.csv` 或 `identification/b_steady_state_raw.csv`
+6. `identification/result.json`
+7. `identification/j_plus_raw.csv`
+8. `identification/j_minus_raw.csv`
+9. `identification/b_coast_down_raw.csv` 或 `identification/b_steady_state_raw.csv`
 
 ## 实操建议
 

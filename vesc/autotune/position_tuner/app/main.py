@@ -28,7 +28,7 @@ def main() -> None:
     best_params, trials, initial_params_details = run_position_tuning(cfg, run_dir=run_dir)
     best_trial = min(trials, key=lambda x: float(x.get("score", 1e9))) if trials else {}
     best_pos_stability = float(best_trial.get("agg_metrics", {}).get("position_stability", 1e9))
-    recommend_speed_retune = best_pos_stability > 0.01
+    recommend_speed_retune = best_pos_stability > 0.02
     write_json(run_dir / "best_params.json", best_params)
     write_json(
         run_dir / "session_meta.json",

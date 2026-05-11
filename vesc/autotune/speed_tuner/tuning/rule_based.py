@@ -150,13 +150,50 @@ def _build_initial_pi(config: RunConfig) -> Tuple[Dict[str, float], Dict[str, ob
     return initial_pi, details
 
 
+def _resolve_speed_tuning_phases(config: RunConfig) -> List[Dict[str, object]]:
+    coarse_iterations = max(0, int(getattr(config.speed_tuner, "coarse_iterations", 0)))
+    fine_iterations = max(0, int(getattr(config.speed_tuner, "fine_iterations", 0)))
+    if coarse_iterations <= 0 and fine_iterations <= 0:
+        return [
+            {
+                "name": "single",
+                "iterations": max(1, int(config.speed_tuner.max_iterations)),
+                "step_scale": dict(config.speed_tuner.step_scale),
+                "restart_from_best": False,
+            }
+        ]
+
+    phases: List[Dict[str, object]] = []
+    if coarse_iterations > 0:
+        phases.append(
+            {
+                "name": "coarse",
+                "iterations": coarse_iterations,
+                "step_scale": dict(config.speed_tuner.step_scale),
+                "restart_from_best": False,
+            }
+        )
+    if fine_iterations > 0:
+        phases.append(
+            {
+                "name": "fine",
+                "iterations": fine_iterations,
+                "step_scale": dict(config.speed_tuner.fine_step_scale),
+                "restart_from_best": bool(phases),
+            }
+        )
+    return phases
+
+
 def _next_pi(
     current_pi: Dict[str, float],
     agg: Dict[str, float],
     config: RunConfig,
+    step_scale_override: Dict[str, float] | None = None,
 ) -> Dict[str, float]:
-    step_kp = float(config.speed_tuner.step_scale.get("kp", 0.10))
-    step_ki = float(config.speed_tuner.step_scale.get("ki", 0.15))
+    step_scale = step_scale_override or config.speed_tuner.step_scale
+    step_kp = float(step_scale.get("kp", 0.10))
+    step_ki = float(step_scale.get("ki", 0.15))
     quantum_kp = float(config.speed_tuner.param_quantum.get("kp", 0.00001))
     quantum_ki = float(config.speed_tuner.param_quantum.get("ki", 0.00001))
     limits = config.speed_tuner.param_limits
@@ -240,6 +277,8 @@ def run_speed_tuning(
     quantum_kp = float(config.speed_tuner.param_quantum.get("kp", 0.00001))
     quantum_ki = float(config.speed_tuner.param_quantum.get("ki", 0.00001))
     tried_history: List[Dict[str, object]] = []
+    phases = _resolve_speed_tuning_phases(config)
+    total_iterations = sum(int(phase["iterations"]) for phase in phases)
 
     with VESCBusClient(config.can, config.motor) as client:
         print(
@@ -247,138 +286,179 @@ def run_speed_tuning(
             f"{initial_pi_details.get('source', 'unknown')}, "
             f"kp={current_pi['s_pid_kp']:.8f}, ki={current_pi['s_pid_ki']:.8f}"
         )
-        for idx in range(int(config.speed_tuner.max_iterations)):
-            print(f"[speed_tuner][iter {idx}] params: kp={current_pi['s_pid_kp']:.8f}, ki={current_pi['s_pid_ki']:.8f}")
-            if bool(config.speed_tuner.auto_write_params):
-                wrote_params = client.write_speed_pi(
-                    kp=float(current_pi["s_pid_kp"]),
-                    ki=float(current_pi["s_pid_ki"]),
-                    save_to_flash=False,
+        global_iter = 0
+        for phase_index, phase in enumerate(phases):
+            phase_name = str(phase["name"])
+            phase_iterations = int(phase["iterations"])
+            phase_step_scale = dict(phase["step_scale"])
+            if phase_iterations <= 0:
+                continue
+            if phase_index > 0 and bool(phase.get("restart_from_best")) and best_params:
+                current_pi = dict(best_params)
+                print(
+                    f"[speed_tuner] 切换到{phase_name}阶段，"
+                    f"从历史最优参数继续: kp={current_pi['s_pid_kp']:.8f}, ki={current_pi['s_pid_ki']:.8f}"
                 )
-                if wrote_params:
-                    print("[speed_tuner] 已自动写入 s_pid_kp / s_pid_ki。")
-                else:
-                    print("[speed_tuner] 当前 s_pid_kp / s_pid_ki 与上次写入一致，跳过重复写入。")
-            elif config.speed_tuner.manual_confirm_each_iteration:
-                user_in = input(
-                    "[speed_tuner] 请先把以上参数人工写入 VESC，再按回车继续；输入 q 终止: "
-                ).strip().lower()
-                if user_in == "q":
-                    print("[speed_tuner] 用户终止迭代。")
-                    break
-
-            # 当前版本 PID 写入默认人工执行：每轮记录建议参数并据此采样评分。
-            trial_metrics_list: List[Dict[str, float]] = []
-            for target_rpm in config.speed_tuner.test_rpms:
-                try:
-                    rec = _run_single_speed_trial(
-                        client=client,
-                        guard=guard,
-                        target_rpm=target_rpm,
-                        trial_seconds=config.speed_tuner.trial_seconds,
-                        sample_timeout_s=config.speed_tuner.sample_timeout_s,
-                        command_hz=config.speed_tuner.command_hz,
-                        read_hz=config.speed_tuner.read_hz,
-                        pos_min_deg=pos_min_cmd,
-                        pos_max_deg=pos_max_cmd,
-                        reverse_at_pos_limits=use_position_limits and bool(config.speed_tuner.reverse_at_pos_limits),
-                        reverse_margin_deg=float(config.speed_tuner.reverse_margin_deg),
-                    )
-                except SafetyViolation as exc:
-                    client.stop_motion()
-                    raise RuntimeError(f"速度环试验触发安全保护: {exc}") from exc
-                if len(rec.samples) < int(config.speed_tuner.min_valid_samples):
-                    raise RuntimeError(
-                        "速度环试验有效采样不足。"
-                        f" target_rpm={target_rpm}, valid_samples={len(rec.samples)},"
-                        f" min_required={config.speed_tuner.min_valid_samples}。"
-                        " 请检查: vesc_id 是否正确、VESC 是否开启状态上报、CAN 收发是否通、sample_timeout_s 是否过小。"
-                    )
-
-                metrics = evaluate_speed_trial(
-                    rec.samples,
-                    target_rpm=target_rpm,
-                    use_abs_rpm=True,
-                    steady_spike_margin_rpm=float(config.speed_tuner.steady_spike_margin_rpm),
+            print(
+                f"[speed_tuner] 阶段 {phase_name}: {phase_iterations} 轮，"
+                f"step_scale(kp={phase_step_scale.get('kp')}, ki={phase_step_scale.get('ki')})"
+            )
+            for phase_iter in range(phase_iterations):
+                idx = global_iter
+                print(
+                    f"[speed_tuner][iter {idx}][{phase_name} {phase_iter + 1}/{phase_iterations}] "
+                    f"params: kp={current_pi['s_pid_kp']:.8f}, ki={current_pi['s_pid_ki']:.8f}"
                 )
-                score = weighted_score(metrics, config.speed_tuner.kpi_weights)
-                trial_metrics_list.append({"target_rpm": target_rpm, "score": score, **metrics})
-                rec.dump_csv(run_dir / "trials" / f"trial_{idx:03d}_{int(target_rpm)}rpm_raw.csv")
-
-            candidate_score = sum(x["score"] for x in trial_metrics_list) / max(1, len(trial_metrics_list))
-            agg_metrics = {
-                "steady_error": _mean([x["steady_error"] for x in trial_metrics_list]),
-                "signed_steady_error": _mean([x["signed_steady_error"] for x in trial_metrics_list]),
-                "overshoot": _mean([x["overshoot"] for x in trial_metrics_list]),
-                "settling_time": _mean([x["settling_time"] for x in trial_metrics_list]),
-                "current_efficiency": _mean([x["current_efficiency"] for x in trial_metrics_list]),
-            }
-            proposed_next_pi = _next_pi(current_pi=current_pi, agg=agg_metrics, config=config)
-            if candidate_score < best_score:
-                best_score = candidate_score
-                best_params = dict(current_pi)
-            next_pi = dict(proposed_next_pi)
-            revisited_candidate = False
-            if tried_history:
-                for ratio in (0.25, 0.5, 1.0, 1.5, 2.0):
-                    candidate = _small_step_towards(
-                        base_pi=current_pi,
-                        target_pi=proposed_next_pi,
-                        config=config,
-                        ratio=ratio,
+                if bool(config.speed_tuner.auto_write_params):
+                    wrote_params = client.write_speed_pi(
+                        kp=float(current_pi["s_pid_kp"]),
+                        ki=float(current_pi["s_pid_ki"]),
+                        save_to_flash=False,
                     )
-                    already_tried = any(
-                        _is_close_pi(
-                            candidate,
-                            item["params"],
-                            quantum_kp=quantum_kp,
-                            quantum_ki=quantum_ki,
-                        )
-                        for item in tried_history
-                    )
-                    if not already_tried:
-                        next_pi = candidate
+                    if wrote_params:
+                        print("[speed_tuner] 已自动写入 s_pid_kp / s_pid_ki。")
+                    else:
+                        print("[speed_tuner] 当前 s_pid_kp / s_pid_ki 与上次写入一致，跳过重复写入。")
+                elif config.speed_tuner.manual_confirm_each_iteration:
+                    user_in = input(
+                        "[speed_tuner] 请先把以上参数人工写入 VESC，再按回车继续；输入 q 终止: "
+                    ).strip().lower()
+                    if user_in == "q":
+                        print("[speed_tuner] 用户终止迭代。")
                         break
+
+                # 当前版本 PID 写入默认人工执行：每轮记录建议参数并据此采样评分。
+                trial_metrics_list: List[Dict[str, float]] = []
+                for target_rpm in config.speed_tuner.test_rpms:
+                    try:
+                        rec = _run_single_speed_trial(
+                            client=client,
+                            guard=guard,
+                            target_rpm=target_rpm,
+                            trial_seconds=config.speed_tuner.trial_seconds,
+                            sample_timeout_s=config.speed_tuner.sample_timeout_s,
+                            command_hz=config.speed_tuner.command_hz,
+                            read_hz=config.speed_tuner.read_hz,
+                            pos_min_deg=pos_min_cmd,
+                            pos_max_deg=pos_max_cmd,
+                            reverse_at_pos_limits=use_position_limits and bool(config.speed_tuner.reverse_at_pos_limits),
+                            reverse_margin_deg=float(config.speed_tuner.reverse_margin_deg),
+                        )
+                    except SafetyViolation as exc:
+                        client.stop_motion()
+                        raise RuntimeError(f"速度环试验触发安全保护: {exc}") from exc
+                    if len(rec.samples) < int(config.speed_tuner.min_valid_samples):
+                        raise RuntimeError(
+                            "速度环试验有效采样不足。"
+                            f" target_rpm={target_rpm}, valid_samples={len(rec.samples)},"
+                            f" min_required={config.speed_tuner.min_valid_samples}。"
+                            " 请检查: vesc_id 是否正确、VESC 是否开启状态上报、CAN 收发是否通、sample_timeout_s 是否过小。"
+                        )
+
+                    metrics = evaluate_speed_trial(
+                        rec.samples,
+                        target_rpm=target_rpm,
+                        use_abs_rpm=True,
+                        steady_spike_margin_rpm=float(config.speed_tuner.steady_spike_margin_rpm),
+                    )
+                    score = weighted_score(metrics, config.speed_tuner.kpi_weights)
+                    trial_metrics_list.append({"target_rpm": target_rpm, "score": score, **metrics})
+                    rec.dump_csv(run_dir / "trials" / f"trial_{idx:03d}_{int(target_rpm)}rpm_raw.csv")
+
+                candidate_score = sum(x["score"] for x in trial_metrics_list) / max(1, len(trial_metrics_list))
+                agg_metrics = {
+                    "steady_error": _mean([x["steady_error"] for x in trial_metrics_list]),
+                    "signed_steady_error": _mean([x["signed_steady_error"] for x in trial_metrics_list]),
+                    "overshoot": _mean([x["overshoot"] for x in trial_metrics_list]),
+                    "settling_time": _mean([x["settling_time"] for x in trial_metrics_list]),
+                    "current_efficiency": _mean([x["current_efficiency"] for x in trial_metrics_list]),
+                }
+                proposed_next_pi = _next_pi(
+                    current_pi=current_pi,
+                    agg=agg_metrics,
+                    config=config,
+                    step_scale_override=phase_step_scale,
+                )
+                if candidate_score < best_score:
+                    best_score = candidate_score
+                    best_params = dict(current_pi)
+                next_pi = dict(proposed_next_pi)
+                revisited_candidate = False
+                if tried_history:
+                    for ratio in (0.25, 0.5, 1.0, 1.5, 2.0):
+                        candidate = _small_step_towards(
+                            base_pi=current_pi,
+                            target_pi=proposed_next_pi,
+                            config=config,
+                            ratio=ratio,
+                        )
+                        already_tried = any(
+                            _is_close_pi(
+                                candidate,
+                                item["params"],
+                                quantum_kp=quantum_kp,
+                                quantum_ki=quantum_ki,
+                            )
+                            for item in tried_history
+                        )
+                        if not already_tried:
+                            next_pi = candidate
+                            break
+                    else:
+                        revisited_candidate = True
+                        next_pi = dict(proposed_next_pi)
+
+                trial_info = {
+                    "iteration": idx,
+                    "stage": phase_name,
+                    "stage_iteration": phase_iter,
+                    "stage_iterations": phase_iterations,
+                    "stage_step_scale": phase_step_scale,
+                    "params_used": dict(current_pi),
+                    "score": candidate_score,
+                    "agg_metrics": agg_metrics,
+                    "next_params_suggestion": next_pi,
+                    "proposed_next_params": proposed_next_pi,
+                    "revisited_candidate": revisited_candidate,
+                    "details": trial_metrics_list,
+                }
+                all_trials.append(trial_info)
+                tried_history.append({"params": dict(current_pi), "score": candidate_score})
+                write_json(run_dir / "trials" / f"trial_{idx:03d}_metrics.json", trial_info)
+                is_last_iteration = idx >= total_iterations - 1
+                is_last_phase_iteration = phase_iter >= phase_iterations - 1
+                if is_last_iteration:
+                    print(
+                        f"[speed_tuner][iter {idx}] score={candidate_score:.6f}, "
+                        f"{total_iterations}轮两阶段探索完成。"
+                    )
+                    print(
+                        "[speed_tuner] 历史最优参数: "
+                        f"kp={best_params['s_pid_kp']:.8f}, ki={best_params['s_pid_ki']:.8f}"
+                    )
+                elif is_last_phase_iteration:
+                    print(
+                        f"[speed_tuner][iter {idx}] score={candidate_score:.6f}, "
+                        f"{phase_name}阶段完成，当前历史最优: "
+                        f"kp={best_params['s_pid_kp']:.8f}, ki={best_params['s_pid_ki']:.8f}"
+                    )
+                elif revisited_candidate:
+                    print(
+                        f"[speed_tuner][iter {idx}] score={candidate_score:.6f}, "
+                        f"当前方向候选已探索，继续沿误差趋势外推: "
+                        f"kp={next_pi['s_pid_kp']:.8f}, ki={next_pi['s_pid_ki']:.8f}"
+                    )
                 else:
-                    revisited_candidate = True
-                    next_pi = dict(proposed_next_pi)
+                    print(
+                        f"[speed_tuner][iter {idx}] score={candidate_score:.6f}, "
+                        f"next: kp={next_pi['s_pid_kp']:.8f}, ki={next_pi['s_pid_ki']:.8f}"
+                    )
 
-            trial_info = {
-                "iteration": idx,
-                "params_used": dict(current_pi),
-                "score": candidate_score,
-                "agg_metrics": agg_metrics,
-                "next_params_suggestion": next_pi,
-                "proposed_next_params": proposed_next_pi,
-                "revisited_candidate": revisited_candidate,
-                "details": trial_metrics_list,
-            }
-            all_trials.append(trial_info)
-            tried_history.append({"params": dict(current_pi), "score": candidate_score})
-            write_json(run_dir / "trials" / f"trial_{idx:03d}_metrics.json", trial_info)
-            is_last_iteration = idx >= int(config.speed_tuner.max_iterations) - 1
-            if is_last_iteration:
-                print(
-                    f"[speed_tuner][iter {idx}] score={candidate_score:.6f}, "
-                    f"{int(config.speed_tuner.max_iterations)}轮探索完成。"
-                )
-                print(
-                    "[speed_tuner] 历史最优参数: "
-                    f"kp={best_params['s_pid_kp']:.8f}, ki={best_params['s_pid_ki']:.8f}"
-                )
-            elif revisited_candidate:
-                print(
-                    f"[speed_tuner][iter {idx}] score={candidate_score:.6f}, "
-                    f"当前方向候选已探索，继续沿误差趋势外推: "
-                    f"kp={next_pi['s_pid_kp']:.8f}, ki={next_pi['s_pid_ki']:.8f}"
-                )
+                current_pi = next_pi
+                global_iter += 1
             else:
-                print(
-                    f"[speed_tuner][iter {idx}] score={candidate_score:.6f}, "
-                    f"next: kp={next_pi['s_pid_kp']:.8f}, ki={next_pi['s_pid_ki']:.8f}"
-                )
-
-            current_pi = next_pi
+                continue
+            break
 
         if bool(config.speed_tuner.auto_write_params) and best_params:
             client.write_speed_pi(

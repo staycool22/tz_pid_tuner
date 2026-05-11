@@ -10,6 +10,7 @@ from autotune.common.acquisition.recorder import Sample, TrialRecorder, write_js
 from autotune.common.config.models import RunConfig
 from autotune.common.io.vesc_client import VESCBusClient
 from autotune.common.safety.guard import SafetyGuard, SafetyLimits, SafetyViolation
+from autotune.speed_tuner.tuning.initial_pi import resolve_initial_pi_from_formula
 
 
 def _cfg_value(data: Dict[str, Any], key: str, default: Any) -> Any:
@@ -464,9 +465,26 @@ def run_initial_pi_identification(config: RunConfig, run_dir: Path) -> Dict[str,
             **damping_details,
         },
     }
+    parameter_generation_method = str(_cfg_value(ident, "parameter_generation_method", "pole_cancellation_pi"))
+    if parameter_generation_method != "pole_cancellation_pi":
+        raise ValueError(
+            "speed_tuner.identification.parameter_generation_method 当前仅支持 pole_cancellation_pi"
+        )
+    generated_speed_pi, generated_speed_pi_details = resolve_initial_pi_from_formula(
+        formula=formula,
+        config=config,
+        source="identification.pole_cancellation_pi",
+    )
+    result["parameter_generation_method"] = parameter_generation_method
+    result["generated_speed_pi"] = generated_speed_pi
+    result["generated_speed_pi_details"] = generated_speed_pi_details
     write_json(ident_dir / "result.json", result)
     print(
         "[speed_tuner] 辨识完成: "
         f"Kt={kt_nm_per_a:.6f} Nm/A, J={inertia_kgm2:.8e} kg*m^2, B={damping_nms_per_rad:.8e} N*m*s/rad"
+    )
+    print(
+        "[speed_tuner] 极点对消初值: "
+        f"kp={generated_speed_pi['s_pid_kp']:.8f}, ki={generated_speed_pi['s_pid_ki']:.8f}"
     )
     return result

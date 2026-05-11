@@ -30,23 +30,29 @@ tz_pid_tuner/
 
 ## PID 自整定方法
 
-`vesc/autotune` 当前采用“首轮初值生成 + 规则式迭代微调”的流程：
+`vesc/autotune` 当前采用“首轮参数生成 + 分阶段规则式微调”的流程：
 
-- 速度环可先基于 `Kt / J / B` 辨识生成首轮 PI，再进入 rule-based 微调。
+- 速度环可先基于 `Kt / J / B` 辨识生成一组极点对消 PI。
+- 速度环支持两种工作模式：辨识后直接退出，或在同一次运行中继续执行粗调 + 精调。
+- 速度环默认可按“粗调阶段 + 精调阶段”连续运行，便于单次命令内完成大步搜索和局部细化。
 - 位置环可先基于速度环带宽推导首轮参数，再执行目标点采样与 rule-based 微调。
 - 每轮使用当前参数执行一组目标点试验并采样原始数据。
 - 从采样中计算指标（误差、超调、响应时间、电流效率等）。
-- 按加权评分选择更优方向，给出下一轮参数建议。
+- 按加权评分选择更优方向，`signed_steady_error` 等辅助指标用于决定下一轮更新方向。
 - 支持回退与小步探索，避免长期卡在同一组参数。
 
 ### 速度环（Speed Tuner）
 
 - 搜索参数：`s_pid_kp`、`s_pid_ki`
 - 控制方式：`send_rpm`
+- 首轮参数：可由辨识阶段基于极点对消法直接生成
+- 调试模式：支持 `identification -> generate PI -> exit`
+- 调试模式：也支持 `identification -> coarse tuning -> fine tuning`
 - 关键指标：
 - `steady_error`：基于逐点绝对误差平均值（MAE）
 - `signed_steady_error`：带符号稳态偏差（均值-目标）
 - `overshoot`、`settling_time`、`current_efficiency`
+- 默认单次流程可配置为 `15` 轮粗调 + `5` 轮精调；trial 记录中会带 `stage` 字段区分阶段
 
 ### 位置环（Position Tuner）
 
@@ -55,6 +61,7 @@ tz_pid_tuner/
 - 关键指标：
 - `position_stability`、`load_hold`、`step_response`、`rebound`
 - 稳态点采用全局 `±1°` 条件筛选；未进入稳态会被高惩罚。
+- 若最佳 `position_stability` 仍大于 `0.02°`，会提示先回退检查速度环基础。
 
 详细实现说明见：
 
@@ -113,6 +120,7 @@ python -m autotune.feedforward_tool.app.main --config autotune/config/default_co
 - `trials/*_metrics.json`：每轮指标与建议参数
 - `best_params.json`：当前会话最佳参数
 - `summary.md`：自动摘要
+- `identification/result.json`：速度环辨识结果、极点对消生成参数与相关细节
 
 ## 使用建议
 

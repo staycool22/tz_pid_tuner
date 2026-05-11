@@ -96,60 +96,69 @@ def _convert_from_rad_per_s(
     )
 
 
+def resolve_initial_pi_from_formula(
+    formula: Dict[str, Any],
+    config: RunConfig,
+    source: str = "initial_pi_formula",
+) -> Tuple[Dict[str, float], Dict[str, Any]]:
+    kt, kt_source = _build_torque_constant(formula)
+    inertia = _positive_float(formula, "inertia_kgm2")
+    damping = _positive_float(formula, "damping_nms_per_rad")
+    bandwidth_rad_s, bandwidth_meta = _build_bandwidth_rad_s(formula)
+    controller_speed_unit = str(formula.get("controller_speed_unit", "erpm"))
+    pole_pairs = _as_float(formula, "pole_pairs")
+    if pole_pairs is None and float(config.motor.pole_pairs) > 0.0:
+        pole_pairs = float(config.motor.pole_pairs)
+
+    kp_rad = inertia * bandwidth_rad_s / kt
+    ki_rad = damping * bandwidth_rad_s / kt
+    kp_value, ki_value, unit_scale = _convert_from_rad_per_s(
+        kp_rad=kp_rad,
+        ki_rad=ki_rad,
+        controller_speed_unit=controller_speed_unit,
+        pole_pairs=pole_pairs,
+    )
+
+    limits = config.speed_tuner.param_limits
+    quantum_kp = float(config.speed_tuner.param_quantum.get("kp", 0.00001))
+    quantum_ki = float(config.speed_tuner.param_quantum.get("ki", 0.00001))
+    kp_value = _quantize(
+        _clamp(kp_value, float(limits["kp_min"]), float(limits["kp_max"])),
+        quantum_kp,
+    )
+    ki_value = _quantize(
+        _clamp(ki_value, float(limits["ki_min"]), float(limits["ki_max"])),
+        quantum_ki,
+    )
+    kp_value = _clamp(kp_value, float(limits["kp_min"]), float(limits["kp_max"]))
+    ki_value = _clamp(ki_value, float(limits["ki_min"]), float(limits["ki_max"]))
+
+    details: Dict[str, Any] = {
+        "source": source,
+        "estimate_kind": str(formula.get("estimate_kind", "unloaded_first_pass")),
+        "controller_speed_unit": controller_speed_unit,
+        "pole_pairs": pole_pairs,
+        "gear_ratio": float(config.motor.gear_ratio),
+        "torque_constant_nm_per_a": kt,
+        "torque_constant_source": kt_source,
+        "inertia_kgm2": inertia,
+        "damping_nms_per_rad": damping,
+        "target_bandwidth_rad_s": bandwidth_rad_s,
+        "unit_scale_from_rad_per_s": unit_scale,
+        "formula_inputs": {**bandwidth_meta},
+        "design_method": "pole_cancellation_pi",
+        "raw_initial_pi": {
+            "s_pid_kp": kp_value,
+            "s_pid_ki": ki_value,
+        },
+    }
+    return {"s_pid_kp": kp_value, "s_pid_ki": ki_value}, details
+
+
 def resolve_initial_pi(config: RunConfig) -> Tuple[Dict[str, float], Dict[str, Any]]:
     formula = dict(config.speed_tuner.initial_pi_formula)
     if formula:
-        kt, kt_source = _build_torque_constant(formula)
-        inertia = _positive_float(formula, "inertia_kgm2")
-        damping = _positive_float(formula, "damping_nms_per_rad")
-        bandwidth_rad_s, bandwidth_meta = _build_bandwidth_rad_s(formula)
-        controller_speed_unit = str(formula.get("controller_speed_unit", "erpm"))
-        pole_pairs = _as_float(formula, "pole_pairs")
-        if pole_pairs is None and float(config.motor.pole_pairs) > 0.0:
-            pole_pairs = float(config.motor.pole_pairs)
-
-        kp_rad = inertia * bandwidth_rad_s / kt
-        ki_rad = damping * bandwidth_rad_s / kt
-        kp_value, ki_value, unit_scale = _convert_from_rad_per_s(
-            kp_rad=kp_rad,
-            ki_rad=ki_rad,
-            controller_speed_unit=controller_speed_unit,
-            pole_pairs=pole_pairs,
-        )
-
-        limits = config.speed_tuner.param_limits
-        quantum_kp = float(config.speed_tuner.param_quantum.get("kp", 0.00001))
-        quantum_ki = float(config.speed_tuner.param_quantum.get("ki", 0.00001))
-        kp_value = _quantize(
-            _clamp(kp_value, float(limits["kp_min"]), float(limits["kp_max"])),
-            quantum_kp,
-        )
-        ki_value = _quantize(
-            _clamp(ki_value, float(limits["ki_min"]), float(limits["ki_max"])),
-            quantum_ki,
-        )
-        kp_value = _clamp(kp_value, float(limits["kp_min"]), float(limits["kp_max"]))
-        ki_value = _clamp(ki_value, float(limits["ki_min"]), float(limits["ki_max"]))
-
-        details: Dict[str, Any] = {
-            "source": "initial_pi_formula",
-            "estimate_kind": str(formula.get("estimate_kind", "unloaded_first_pass")),
-            "controller_speed_unit": controller_speed_unit,
-            "pole_pairs": pole_pairs,
-            "gear_ratio": float(config.motor.gear_ratio),
-            "torque_constant_nm_per_a": kt,
-            "torque_constant_source": kt_source,
-            "inertia_kgm2": inertia,
-            "damping_nms_per_rad": damping,
-            "target_bandwidth_rad_s": bandwidth_rad_s,
-            "unit_scale_from_rad_per_s": unit_scale,
-            "formula_inputs": {**bandwidth_meta},
-            "raw_initial_pi": {
-                "s_pid_kp": kp_value,
-                "s_pid_ki": ki_value,
-            },
-        }
-        return {"s_pid_kp": kp_value, "s_pid_ki": ki_value}, details
+        return resolve_initial_pi_from_formula(formula=formula, config=config)
 
     initial = dict(config.speed_tuner.initial_pi)
     if "s_pid_kp" in initial and "s_pid_ki" in initial:
