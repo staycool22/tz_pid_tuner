@@ -1,2 +1,4 @@
 vesc/plan.md
 vesc/runs/
+__pycache__/
+**/__pycache__/
