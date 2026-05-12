@@ -1,3 +1,4 @@
+#CAN配置栏主要配置CAN盒设置，包括设备名称、后端、波特率、数据位、停止位、校验位、通道号、是否开启FD模式
 can:
   device: TZUSB2CAN
   backend: candle
@@ -6,8 +7,9 @@ can:
   sp: 0.8
   dsp: 0.75
   channels: [0]
-  fd: false
+  fd: true
 
+#motor设置栏主要配置电机参数，包括vesc_id、应用模式、位置窗口、峰值电流限制、极对数、齿轮比、最大速度
 motor:
   vesc_id: 45
   # robotic_arm: 启用 pid_pos 角度安全窗口与速度环限位反向
@@ -16,24 +18,20 @@ motor:
   pos_window_deg: [10.0, 80.0]
   peak_current_limit_a: 20.0
   pole_pairs: 14
-  gear_ratio: 1.0
+  gear_ratio: 48.0
   l_max_erpm: 50000.0
 
+#速度环自整定参数设置
 speed_tuner:
-  test_rpms: [1000.0]
-  trial_seconds: 15.0
-  sample_timeout_s: 0.1
-  command_hz: 100.0
-  read_hz: 300.0
-  reverse_at_pos_limits: true
-  reverse_margin_deg: 0.0
+  test_erpms: [1000.0] # 测试速度，单位为ERPM
+  trial_seconds: 15.0 # 试验时间，单位为秒
+  command_hz: 100.0 # 命令频率，单位为Hz
+  read_hz: 300.0 # 读取频率，单位为Hz
+  # 速度环试验在机械臂位置窗口附近允许的软限位额外容差。
+  # 命中反向阈值后，若因惯性或采样延迟有少量越界，仍可在此容差内继续受保护运行。
   reverse_soft_limit_tolerance_deg: 10.0
   #steady_state_priority: true 表示优先考虑稳态响应，会忽略超调等因素进行PI参数调整
   steady_state_priority: false
-  steady_spike_margin_rpm: 3000.0
-  param_quantum:
-    kp: 0.00001
-    ki: 0.00001
   identification:
     enabled: false
     estimate_kind: unloaded_first_pass
@@ -44,9 +42,6 @@ speed_tuner:
     feedback_speed_unit: erpm
     #这里设置的是是否在辨识前手动确认，false表示自动确认，true表示手动确认。
     manual_confirm_before_identification: false
-    command_hz: 100.0
-    read_hz: 300.0
-    sample_timeout_s: 0.05
     # 首轮辨识默认电流:
     # 若 iq_test_a 留空，则使用 peak_current_limit_a * iq_test_ratio
     # 这里默认 20A * 0.10 = 2.0A
@@ -60,10 +55,8 @@ speed_tuner:
   initial_pi:
     s_pid_kp: 0.0005
     s_pid_ki: 0.00045
-  # 兼容旧单阶段模式：当 coarse_iterations / fine_iterations 都为 0 时，回退使用 max_iterations。
-  max_iterations: 5
-  # 单次运行内先做 15 轮粗调，再自动以历史最优参数为起点做 5 轮精调。
-  coarse_iterations: 15
+  # 单次运行内先做 10 轮粗调，再自动以历史最优参数为起点做 5 轮精调。
+  coarse_iterations: 10
   fine_iterations: 5
   improve_threshold: 0.5
   # auto_write_params=true 时，调试过程中会自动写入参数并自动进入下一轮；
@@ -71,45 +64,41 @@ speed_tuner:
   auto_write_params: false
   #这里是设置的是可允许调整kp,ki的最大步长，kp,ki的步长为[kp_step, ki_step]
   step_scale:
-    kp: 1
-    ki: 1
+    kp: 1.5
+    ki: 1.5
   # 精调阶段使用更小步长，避免在较优区间内跨步过大。
   fine_step_scale:
-    kp: 0.35
-    ki: 0.35
+    kp: 0.15
+    ki: 0.15
   #这里设置的是kp,ki的上下限，kp,ki的取值范围为[kp_min, kp_max]，[ki_min, ki_max]
   param_limits:
     kp_min: 0.0005
     kp_max: 0.0500
     ki_min: 0.0000
     ki_max: 0.5000
-  min_valid_samples: 5
-  manual_confirm_each_iteration: true
+  #这里设置的是是否在每次迭代后手动确认，false表示自动确认，true表示手动确认。
+  manual_confirm_each_iteration: false
   kpi_weights:
     steady_error: 0.6
     overshoot: 0.15
     settling_time: 0.25
     current_efficiency: 0.00
-  candidate_pi:
-    - s_pid_kp: 0.0010
-      s_pid_ki: 0.0000
 
 position_tuner:
-  target_positions_deg: [40,70.0]
-  trial_seconds: 30.0
-  sample_timeout_s: 0.05
-  command_hz: 100.0
-  read_hz: 300.0
-  ui_like_pass_through: true
-  motion_duration_s: 0.5
-  ff_rpm_bias: 0.0
-  ff_current_a: 0.0
+  target_positions_deg: [40,70.0] #设置测试角度
+  trial_seconds: 30.0 #设置试验时间
+  sample_timeout_s: 0.05 #设置采样超时时间，单位为秒
+  command_hz: 100.0 #设置命令频率，单位为Hz
+  read_hz: 300.0 #设置读取频率，单位为Hz
+  motion_duration_s: 0.5 #设置运动持续时间，单位为秒
+  ff_rpm_bias: 0.0 #设置ff_rpm偏置，单位为ERPM
+  ff_current_a: 0.0 #设置ff_current偏置，单位为A
   initial_params_formula:
-    position_interpretation: output_shaft
-    speed_bandwidth_rad_s: 25.0
-    position_to_speed_bandwidth_ratio: 8.0
-    l_max_erpm: 50000.0
-    p_pid_kd_proc: 0.0
+    position_interpretation: output_shaft #设置位置解释为输出轴位置
+    speed_bandwidth_rad_s: 100.0 #设置速度环宽，单位为rad/s
+    position_to_speed_bandwidth_ratio: 8.0 #设置位置环宽与速度环宽的比值
+    l_max_erpm: 50000.0 #设置最大ERPM，单位为ERPM
+    p_pid_kd_proc: 0.00 #设置位置环kd系数，单位为ERPM
 
   initial_params:
     p_pid_kp: 0.04
@@ -119,6 +108,7 @@ position_tuner:
   # auto_write_params=true 时，调试过程中会自动写入参数并自动进入下一轮；
   # 每次写入后会回读校验，不一致则立即终止；整轮结束后会把历史最优参数带保存标志写入。
   auto_write_params: true
+  #这里设置的是是否在每次迭代后手动确认，false表示自动确认，true表示手动确认。
   manual_confirm_each_iteration: true
   step_scale:
     kp: 0.50
@@ -134,7 +124,3 @@ position_tuner:
     step_response: 0.25
     rebound: 0.10
     current_efficiency: 0.0
-  # 向后兼容字段：若 initial_params 缺失会回退使用第一组。
-  candidate_params:
-    - p_pid_kp: 0.010
-      p_pid_kd_proc: 0.000

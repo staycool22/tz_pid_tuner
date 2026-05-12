@@ -12,6 +12,8 @@ from autotune.common.io.vesc_client import VESCBusClient
 from autotune.common.safety.guard import SafetyGuard, SafetyLimits, SafetyViolation
 from autotune.speed_tuner.tuning.initial_pi import resolve_initial_pi_from_formula
 
+DEFAULT_IDENTIFICATION_SAMPLE_TIMEOUT_S = 0.05
+
 
 def _cfg_value(data: Dict[str, Any], key: str, default: Any) -> Any:
     value = data.get(key, default)
@@ -208,9 +210,9 @@ def _estimate_inertia(
         guard=guard,
         current_a=iq_test_a,
         duration_s=step_duration_s,
-        command_hz=_cfg_float(ident, "command_hz", 100.0),
-        read_hz=_cfg_float(ident, "read_hz", config.speed_tuner.read_hz),
-        sample_timeout_s=_cfg_float(ident, "sample_timeout_s", config.speed_tuner.sample_timeout_s),
+        command_hz=float(config.speed_tuner.command_hz),
+        read_hz=float(config.speed_tuner.read_hz),
+        sample_timeout_s=DEFAULT_IDENTIFICATION_SAMPLE_TIMEOUT_S,
     )
     plus_rec.dump_csv(ident_dir / "j_plus_raw.csv")
     time.sleep(rest_s)
@@ -220,9 +222,9 @@ def _estimate_inertia(
         guard=guard,
         current_a=-iq_test_a,
         duration_s=step_duration_s,
-        command_hz=_cfg_float(ident, "command_hz", 100.0),
-        read_hz=_cfg_float(ident, "read_hz", config.speed_tuner.read_hz),
-        sample_timeout_s=_cfg_float(ident, "sample_timeout_s", config.speed_tuner.sample_timeout_s),
+        command_hz=float(config.speed_tuner.command_hz),
+        read_hz=float(config.speed_tuner.read_hz),
+        sample_timeout_s=DEFAULT_IDENTIFICATION_SAMPLE_TIMEOUT_S,
     )
     minus_rec.dump_csv(ident_dir / "j_minus_raw.csv")
     time.sleep(rest_s)
@@ -273,9 +275,9 @@ def _estimate_damping_from_coast_down(
         guard=guard,
         current_a=spinup_current,
         duration_s=_cfg_float(ident, "coast_down_spinup_duration_s", 0.60),
-        command_hz=_cfg_float(ident, "command_hz", 100.0),
-        read_hz=_cfg_float(ident, "read_hz", config.speed_tuner.read_hz),
-        sample_timeout_s=_cfg_float(ident, "sample_timeout_s", config.speed_tuner.sample_timeout_s),
+        command_hz=float(config.speed_tuner.command_hz),
+        read_hz=float(config.speed_tuner.read_hz),
+        sample_timeout_s=DEFAULT_IDENTIFICATION_SAMPLE_TIMEOUT_S,
     )
     spinup_rec.dump_csv(ident_dir / "b_spinup_raw.csv")
     time.sleep(_cfg_float(ident, "rest_between_steps_s", 0.20))
@@ -285,9 +287,9 @@ def _estimate_damping_from_coast_down(
         guard=guard,
         current_a=0.0,
         duration_s=_cfg_float(ident, "coast_down_duration_s", 0.80),
-        command_hz=_cfg_float(ident, "command_hz", 100.0),
-        read_hz=_cfg_float(ident, "read_hz", config.speed_tuner.read_hz),
-        sample_timeout_s=_cfg_float(ident, "sample_timeout_s", config.speed_tuner.sample_timeout_s),
+        command_hz=float(config.speed_tuner.command_hz),
+        read_hz=float(config.speed_tuner.read_hz),
+        sample_timeout_s=DEFAULT_IDENTIFICATION_SAMPLE_TIMEOUT_S,
     )
     coast_rec.dump_csv(ident_dir / "b_coast_down_raw.csv")
 
@@ -351,9 +353,9 @@ def _estimate_damping_from_steady_state(
         guard=guard,
         current_a=iq_test_a,
         duration_s=_cfg_float(ident, "steady_state_duration_s", 1.00),
-        command_hz=_cfg_float(ident, "command_hz", 100.0),
-        read_hz=_cfg_float(ident, "read_hz", config.speed_tuner.read_hz),
-        sample_timeout_s=_cfg_float(ident, "sample_timeout_s", config.speed_tuner.sample_timeout_s),
+        command_hz=float(config.speed_tuner.command_hz),
+        read_hz=float(config.speed_tuner.read_hz),
+        sample_timeout_s=DEFAULT_IDENTIFICATION_SAMPLE_TIMEOUT_S,
     )
     rec.dump_csv(ident_dir / "b_steady_state_raw.csv")
     eval_window_s = _cfg_float(ident, "steady_state_eval_window_s", 0.25)

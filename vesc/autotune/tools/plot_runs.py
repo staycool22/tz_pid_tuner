@@ -60,12 +60,17 @@ def _format_pid(params: Dict[str, object]) -> str:
 
 
 def _collect_targets(trials: List[Dict], is_position: bool) -> List[float]:
-    key = "target_pos_deg" if is_position else "target_rpm"
     values: List[float] = []
     for t in trials:
         for d in t.get("details", []):
-            if key in d:
-                values.append(_safe_float(d.get(key, 0.0)))
+            if is_position:
+                if "target_pos_deg" in d:
+                    values.append(_safe_float(d.get("target_pos_deg", 0.0)))
+            else:
+                if "target_erpm" in d:
+                    values.append(_safe_float(d.get("target_erpm", 0.0)))
+                elif "target_rpm" in d:
+                    values.append(_safe_float(d.get("target_rpm", 0.0)))
     uniq = sorted(set(values))
     return uniq
 
@@ -96,7 +101,7 @@ def _plot_iteration_metrics(run_dir: Path, trials: List[Dict], is_position: bool
     m3 = [_safe_float(x.get("agg_metrics", {}).get(m3_key, 0.0)) for x in trials]
 
     targets = _collect_targets(trials, is_position=is_position)
-    target_unit = "deg" if is_position else "rpm"
+    target_unit = "deg" if is_position else "erpm"
     target_text = ", ".join(f"{x:g}" for x in targets) if targets else "N/A"
     pid_rows = [
         f"iter {int(_safe_float(t.get('iteration', i)))}: {_format_pid(dict(t.get('params_used', {})))}"
@@ -153,13 +158,15 @@ def _find_raw_csv(trials_dir: Path, iteration: int, target: float, is_position: 
     if is_position:
         preferred = trials_dir / f"trial_{iteration:03d}_{int(target)}deg_raw.csv"
     else:
-        preferred = trials_dir / f"trial_{iteration:03d}_{int(target)}rpm_raw.csv"
+        preferred = trials_dir / f"trial_{iteration:03d}_{int(target)}erpm_raw.csv"
     if preferred.exists():
         return preferred
 
     prefix = f"trial_{iteration:03d}_"
-    suffix = "deg_raw.csv" if is_position else "rpm_raw.csv"
-    candidates = [p for p in trials_dir.glob(f"{prefix}*{suffix}")]
+    suffixes = ["deg_raw.csv"] if is_position else ["erpm_raw.csv", "rpm_raw.csv"]
+    candidates: List[Path] = []
+    for suffix in suffixes:
+        candidates.extend(trials_dir.glob(f"{prefix}*{suffix}"))
     return candidates[0] if candidates else None
 
 
@@ -174,16 +181,21 @@ def _plot_overlay_details(
     if not selected_trials:
         return out_files
 
-    target_key = "target_pos_deg" if is_position else "target_rpm"
-    unit = "deg" if is_position else "rpm"
-    y_label = "Position (deg)" if is_position else "RPM"
+    unit = "deg" if is_position else "erpm"
+    y_label = "Position (deg)" if is_position else "ERPM"
     value_key = "pos_deg" if is_position else "rpm"
 
     target_values: List[float] = []
     for trial in selected_trials:
         for detail in trial.get("details", []):
-            if target_key in detail:
-                target_values.append(_safe_float(detail.get(target_key, 0.0)))
+            if is_position:
+                if "target_pos_deg" in detail:
+                    target_values.append(_safe_float(detail.get("target_pos_deg", 0.0)))
+            else:
+                if "target_erpm" in detail:
+                    target_values.append(_safe_float(detail.get("target_erpm", 0.0)))
+                elif "target_rpm" in detail:
+                    target_values.append(_safe_float(detail.get("target_rpm", 0.0)))
     unique_targets = sorted(set(target_values))
 
     for target in unique_targets:

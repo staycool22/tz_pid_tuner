@@ -20,7 +20,6 @@ def _run_single_position_trial(
     sample_timeout_s: float,
     command_hz: float,
     read_hz: float,
-    ui_like_pass_through: bool,
     motion_duration_s: float,
     ff_rpm_bias: float,
     ff_current_a: float,
@@ -71,22 +70,18 @@ def _run_single_position_trial(
         while time.perf_counter() - start <= trial_seconds:
             now = time.perf_counter()
             if now >= next_send_tick:
-                cmd_pos = float(target_pos_deg)
-                cmd_rpm = 0.0
-                cmd_cur = 0.0
-                if ui_like_pass_through:
-                    duration_s = max(float(motion_duration_s), 1e-6)
-                    tau = min(max((now - plan_start_t) / duration_s, 0.0), 1.0)
-                    delta_deg = float(target_pos_deg) - float(plan_start_pos)
-                    s = 10.0 * tau**3 - 15.0 * tau**4 + 6.0 * tau**5
-                    cmd_pos = float(plan_start_pos) + delta_deg * s
-                    if 0.0 < tau < 1.0:
-                        ds_dt = (30.0 * tau**2 - 60.0 * tau**3 + 30.0 * tau**4) / duration_s
-                        cmd_rpm = abs(delta_deg * ds_dt) * (60.0 / 360.0)
-                    else:
-                        cmd_rpm = 0.0
-                    cmd_rpm += float(ff_rpm_bias)
-                    cmd_cur = float(ff_current_a)
+                duration_s = max(float(motion_duration_s), 1e-6)
+                tau = min(max((now - plan_start_t) / duration_s, 0.0), 1.0)
+                delta_deg = float(target_pos_deg) - float(plan_start_pos)
+                s = 10.0 * tau**3 - 15.0 * tau**4 + 6.0 * tau**5
+                cmd_pos = float(plan_start_pos) + delta_deg * s
+                if 0.0 < tau < 1.0:
+                    ds_dt = (30.0 * tau**2 - 60.0 * tau**3 + 30.0 * tau**4) / duration_s
+                    cmd_rpm = abs(delta_deg * ds_dt) * (60.0 / 360.0)
+                else:
+                    cmd_rpm = 0.0
+                cmd_rpm += float(ff_rpm_bias)
+                cmd_cur = float(ff_current_a)
                 safe_pos, safe_rpm, safe_cur = _clamp_pass_through(cmd_pos, cmd_rpm, cmd_cur)
                 client.send_pass_through(pos_deg=safe_pos, rpm=safe_rpm, current_a=safe_cur)
 
@@ -221,7 +216,6 @@ def run_position_tuning(
                         sample_timeout_s=config.position_tuner.sample_timeout_s,
                         command_hz=config.position_tuner.command_hz,
                         read_hz=config.position_tuner.read_hz,
-                        ui_like_pass_through=bool(config.position_tuner.ui_like_pass_through),
                         motion_duration_s=float(config.position_tuner.motion_duration_s),
                         ff_rpm_bias=float(config.position_tuner.ff_rpm_bias),
                         ff_current_a=float(config.position_tuner.ff_current_a),

@@ -5,6 +5,9 @@ from typing import Dict, List
 from autotune.common.acquisition.recorder import Sample
 
 
+DEFAULT_STEADY_SPIKE_MARGIN_RPM = 3000.0
+
+
 def _mean(values: List[float]) -> float:
     return float(sum(values) / len(values)) if values else 0.0
 
@@ -13,7 +16,6 @@ def evaluate_speed_trial(
     samples: List[Sample],
     target_rpm: float,
     use_abs_rpm: bool = False,
-    steady_spike_margin_rpm: float = 2000.0,
 ) -> Dict[str, float]:
     if not samples:
         return {
@@ -27,7 +29,7 @@ def evaluate_speed_trial(
     rpms = [abs(s.rpm) if use_abs_rpm else s.rpm for s in samples]
     target = abs(target_rpm) if use_abs_rpm else target_rpm
     currents = [abs(s.current_a) for s in samples]
-    spike_upper_bound = abs(target) + max(0.0, float(steady_spike_margin_rpm))
+    spike_upper_bound = abs(target) + DEFAULT_STEADY_SPIKE_MARGIN_RPM
     steady_slice = [x for x in rpms if abs(x) <= spike_upper_bound]
     if not steady_slice:
         steady_slice = rpms

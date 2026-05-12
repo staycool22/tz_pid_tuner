@@ -12,6 +12,13 @@ from autotune.common.io.vesc_client import VESCBusClient
 from autotune.common.safety.guard import SafetyGuard, SafetyLimits, SafetyViolation
 from autotune.speed_tuner.tuning.initial_pi import resolve_initial_pi
 
+# 速度环试验默认在机械臂位置窗口边缘自动反向；并可通过提前量控制掉头时机。
+DEFAULT_REVERSE_AT_POS_LIMITS = True
+DEFAULT_REVERSE_MARGIN_DEG = 0.0
+# 速度环 trial 默认单次接收反馈超时时间，以及判定本轮数据是否足够可信的最小有效采样数。
+DEFAULT_SPEED_SAMPLE_TIMEOUT_S = 0.05
+DEFAULT_SPEED_MIN_VALID_SAMPLES = 5
+
 
 def _run_single_speed_trial(
     client: VESCBusClient,
@@ -198,7 +205,7 @@ def _next_pi(
     quantum_ki = float(config.speed_tuner.param_quantum.get("ki", 0.00001))
     limits = config.speed_tuner.param_limits
     trial_seconds = float(config.speed_tuner.trial_seconds)
-    avg_target_abs = max(1.0, _mean([abs(x) for x in config.speed_tuner.test_rpms]))
+    avg_target_abs = max(1.0, _mean([abs(x) for x in config.speed_tuner.test_erpms]))
 
     kp = float(current_pi["s_pid_kp"])
     ki = float(current_pi["s_pid_ki"])
@@ -259,7 +266,7 @@ def run_speed_tuning(
     pos_max_cmd = float(config.motor.pos_window_deg[1])
     soft_tol = (
         float(config.speed_tuner.reverse_soft_limit_tolerance_deg)
-        if use_position_limits and bool(config.speed_tuner.reverse_at_pos_limits)
+        if use_position_limits and DEFAULT_REVERSE_AT_POS_LIMITS
         else 0.0
     )
     limits = SafetyLimits(
@@ -329,41 +336,40 @@ def run_speed_tuning(
 
                 # 当前版本 PID 写入默认人工执行：每轮记录建议参数并据此采样评分。
                 trial_metrics_list: List[Dict[str, float]] = []
-                for target_rpm in config.speed_tuner.test_rpms:
+                for target_erpm in config.speed_tuner.test_erpms:
                     try:
                         rec = _run_single_speed_trial(
                             client=client,
                             guard=guard,
-                            target_rpm=target_rpm,
+                            target_rpm=target_erpm,
                             trial_seconds=config.speed_tuner.trial_seconds,
-                            sample_timeout_s=config.speed_tuner.sample_timeout_s,
+                            sample_timeout_s=DEFAULT_SPEED_SAMPLE_TIMEOUT_S,
                             command_hz=config.speed_tuner.command_hz,
                             read_hz=config.speed_tuner.read_hz,
                             pos_min_deg=pos_min_cmd,
                             pos_max_deg=pos_max_cmd,
-                            reverse_at_pos_limits=use_position_limits and bool(config.speed_tuner.reverse_at_pos_limits),
-                            reverse_margin_deg=float(config.speed_tuner.reverse_margin_deg),
+                            reverse_at_pos_limits=use_position_limits and DEFAULT_REVERSE_AT_POS_LIMITS,
+                            reverse_margin_deg=DEFAULT_REVERSE_MARGIN_DEG,
                         )
                     except SafetyViolation as exc:
                         client.stop_motion()
                         raise RuntimeError(f"速度环试验触发安全保护: {exc}") from exc
-                    if len(rec.samples) < int(config.speed_tuner.min_valid_samples):
+                    if len(rec.samples) < DEFAULT_SPEED_MIN_VALID_SAMPLES:
                         raise RuntimeError(
                             "速度环试验有效采样不足。"
-                            f" target_rpm={target_rpm}, valid_samples={len(rec.samples)},"
-                            f" min_required={config.speed_tuner.min_valid_samples}。"
+                            f" target_erpm={target_erpm}, valid_samples={len(rec.samples)},"
+                            f" min_required={DEFAULT_SPEED_MIN_VALID_SAMPLES}。"
                             " 请检查: vesc_id 是否正确、VESC 是否开启状态上报、CAN 收发是否通、sample_timeout_s 是否过小。"
                         )
 
                     metrics = evaluate_speed_trial(
                         rec.samples,
-                        target_rpm=target_rpm,
+                        target_rpm=target_erpm,
                         use_abs_rpm=True,
-                        steady_spike_margin_rpm=float(config.speed_tuner.steady_spike_margin_rpm),
                     )
                     score = weighted_score(metrics, config.speed_tuner.kpi_weights)
-                    trial_metrics_list.append({"target_rpm": target_rpm, "score": score, **metrics})
-                    rec.dump_csv(run_dir / "trials" / f"trial_{idx:03d}_{int(target_rpm)}rpm_raw.csv")
+                    trial_metrics_list.append({"target_erpm": target_erpm, "score": score, **metrics})
+                    rec.dump_csv(run_dir / "trials" / f"trial_{idx:03d}_{int(target_erpm)}erpm_raw.csv")
 
                 candidate_score = sum(x["score"] for x in trial_metrics_list) / max(1, len(trial_metrics_list))
                 agg_metrics = {

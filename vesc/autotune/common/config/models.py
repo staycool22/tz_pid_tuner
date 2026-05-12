@@ -41,16 +41,12 @@ class MotorConfig:
 
 @dataclass
 class SpeedTuneConfig:
-    test_rpms: List[float] = field(default_factory=lambda: [300.0, 600.0, 900.0])
+    test_erpms: List[float] = field(default_factory=lambda: [300.0, 600.0, 900.0])
     trial_seconds: float = 2.0
-    sample_timeout_s: float = 0.05
     command_hz: float = 10.0
     read_hz: float = 500.0
-    reverse_at_pos_limits: bool = True
-    reverse_margin_deg: float = 1.0
     reverse_soft_limit_tolerance_deg: float = 10.0
     steady_state_priority: bool = True
-    steady_spike_margin_rpm: float = 2000.0
     param_quantum: Dict[str, float] = field(default_factory=lambda: {"kp": 0.00001, "ki": 0.00001})
     identification: Dict[str, Any] = field(
         default_factory=lambda: {
@@ -61,9 +57,6 @@ class SpeedTuneConfig:
             "controller_speed_unit": "erpm",
             "feedback_speed_unit": "erpm",
             "manual_confirm_before_identification": True,
-            "command_hz": 100.0,
-            "read_hz": 300.0,
-            "sample_timeout_s": 0.05,
             "iq_test_ratio": 0.10,
             "iq_test_a": None,
             "settle_time_s": 0.05,
@@ -107,7 +100,6 @@ class SpeedTuneConfig:
             "ki_max": 0.5000,
         }
     )
-    min_valid_samples: int = 5
     auto_write_params: bool = False
     manual_confirm_each_iteration: bool = True
     kpi_weights: Dict[str, float] = field(
@@ -118,14 +110,6 @@ class SpeedTuneConfig:
             "current_efficiency": 0.15,
         }
     )
-    # 兼容旧配置：若未设置 initial_pi，则回退使用 candidate_pi 第一组。
-    candidate_pi: List[Dict[str, float]] = field(
-        default_factory=lambda: [
-            {"s_pid_kp": 0.0020, "s_pid_ki": 0.0080},
-            {"s_pid_kp": 0.0030, "s_pid_ki": 0.0120},
-            {"s_pid_kp": 0.0040, "s_pid_ki": 0.0160},
-        ]
-    )
 
 
 @dataclass
@@ -135,7 +119,6 @@ class PositionTuneConfig:
     sample_timeout_s: float = 0.05
     command_hz: float = 100.0
     read_hz: float = 300.0
-    ui_like_pass_through: bool = True
     motion_duration_s: float = 0.5
     ff_rpm_bias: float = 0.0
     ff_current_a: float = 0.0
@@ -169,14 +152,6 @@ class PositionTuneConfig:
             "current_efficiency": 0.10,
         }
     )
-    # 兼容旧配置：若未设置 initial_params，则回退使用 candidate_params 第一组。
-    candidate_params: List[Dict[str, float]] = field(
-        default_factory=lambda: [
-            {"p_pid_kp": 0.020, "p_pid_kd_proc": 0.000},
-            {"p_pid_kp": 0.030, "p_pid_kd_proc": 0.002},
-            {"p_pid_kp": 0.040, "p_pid_kd_proc": 0.004},
-        ]
-    )
 
 
 @dataclass
@@ -195,6 +170,19 @@ class RunConfig:
     def from_dict(cls, data: Dict[str, Any]) -> "RunConfig":
         speed_tuner_data = dict(data.get("speed_tuner", {}))
         position_tuner_data = dict(data.get("position_tuner", {}))
+
+        if "test_erpms" not in speed_tuner_data and "test_rpms" in speed_tuner_data:
+            speed_tuner_data["test_erpms"] = speed_tuner_data.pop("test_rpms")
+        speed_tuner_data.pop("candidate_pi", None)
+        speed_tuner_data.pop("param_quantum", None)
+        speed_tuner_data.pop("sample_timeout_s", None)
+        speed_tuner_data.pop("min_valid_samples", None)
+        identification_data = dict(speed_tuner_data.get("identification", {}))
+        identification_data.pop("command_hz", None)
+        identification_data.pop("read_hz", None)
+        identification_data.pop("sample_timeout_s", None)
+        if identification_data:
+            speed_tuner_data["identification"] = identification_data
 
         speed_defaults = SpeedTuneConfig()
         position_defaults = PositionTuneConfig()
@@ -231,6 +219,9 @@ class RunConfig:
             speed_defaults.kpi_weights,
             speed_tuner_data.get("kpi_weights"),
         )
+
+        position_tuner_data.pop("candidate_params", None)
+        position_tuner_data.pop("ui_like_pass_through", None)
 
         position_tuner_data["initial_params_formula"] = _merge_default_dict(
             position_defaults.initial_params_formula,

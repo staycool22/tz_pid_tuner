@@ -45,7 +45,6 @@ def main() -> None:
             "resolved_initial_params": initial_params_details,
             "command_hz": cfg.position_tuner.command_hz,
             "read_hz": cfg.position_tuner.read_hz,
-            "ui_like_pass_through": cfg.position_tuner.ui_like_pass_through,
             "motion_duration_s": cfg.position_tuner.motion_duration_s,
             "ff_rpm_bias": cfg.position_tuner.ff_rpm_bias,
             "ff_current_a": cfg.position_tuner.ff_current_a,

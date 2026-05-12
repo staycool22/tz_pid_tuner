@@ -108,12 +108,7 @@ def resolve_initial_position_params(config: RunConfig) -> Tuple[Dict[str, float]
     if "p_pid_kp" in initial and "p_pid_kd_proc" in initial:
         return initial, {"source": "position_tuner.initial_params"}
 
-    if config.position_tuner.candidate_params:
-        return dict(config.position_tuner.candidate_params[0]), {
-            "source": "position_tuner.candidate_params[0]"
-        }
-
     raise ValueError(
         "无法确定位置环初始参数。请配置 position_tuner.initial_params_formula，"
-        "或提供 position_tuner.initial_params / candidate_params。"
+        "或提供 position_tuner.initial_params。"
     )

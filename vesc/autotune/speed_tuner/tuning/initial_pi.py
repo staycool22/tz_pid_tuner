@@ -164,10 +164,7 @@ def resolve_initial_pi(config: RunConfig) -> Tuple[Dict[str, float], Dict[str, A
     if "s_pid_kp" in initial and "s_pid_ki" in initial:
         return initial, {"source": "speed_tuner.initial_pi"}
 
-    if config.speed_tuner.candidate_pi:
-        return dict(config.speed_tuner.candidate_pi[0]), {"source": "speed_tuner.candidate_pi[0]"}
-
     raise ValueError(
         "无法确定速度环初始 PI。请配置 speed_tuner.initial_pi_formula，"
-        "或提供 speed_tuner.initial_pi / candidate_pi。"
+        "或提供 speed_tuner.initial_pi。"
     )
